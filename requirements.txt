@@ -1,0 +1,7 @@
+# Python Dependencies
+
+Flask
+requests
+numpy
+pandas
+

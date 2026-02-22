@@ -1,0 +1,38 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+*.txt
+!requirements.txt
+test_output*.txt
+*_output.txt
+*_result.txt
+*_verification.txt
+
+# Logs
+*.log
+
+# Node modules (if any)
+node_modules/

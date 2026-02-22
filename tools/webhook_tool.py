@@ -1,0 +1,313 @@
+# tools/webhook_tool.py
+import requests
+import json
+import smtplib
+import os
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from typing import Dict, Any, Optional
+from dotenv import load_dotenv
+
+# Load .env file if exists
+load_dotenv()
+
+# Try to load from environment variables or .env file
+def _load_config():
+    """Load configuration from environment variables."""
+    return {
+        "GMAIL_EMAIL": os.environ.get("GMAIL_EMAIL"),
+        "GMAIL_APP_PASSWORD": os.environ.get("GMAIL_APP_PASSWORD"),
+        "SMS_API_KEY": os.environ.get("SMS_API_KEY")
+    }
+
+# Load config at module import
+_config = _load_config()
+
+# Configuration for Gmail
+# Set these in your .env file or environment variables
+GMAIL_EMAIL = _config.get("GMAIL_EMAIL")      # your-email@gmail.com
+GMAIL_APP_PASSWORD = _config.get("GMAIL_APP_PASSWORD")  # Gmail App Password (not your regular password)
+
+# SMS Configuration (optional)
+SMS_API_KEY = _config.get("SMS_API_KEY")
+
+
+def set_gmail_config(email: str, app_password: str):
+    """Configure Gmail settings"""
+    global GMAIL_EMAIL, GMAIL_APP_PASSWORD
+    GMAIL_EMAIL = email
+    GMAIL_APP_PASSWORD = app_password
+
+
+def set_sms_config(api_key: str):
+    """Configure SMS settings"""
+    global SMS_API_KEY
+    SMS_API_KEY = api_key
+
+
+def trigger_fulfillment(order_id: str):
+    """Trigger warehouse fulfillment webhook"""
+    print(f"Webhook: order {order_id} sent to warehouse.")
+    return {"status": "fulfilled", "order_id": order_id}
+
+
+def send_order_confirmation_email(
+    to_email: str,
+    order_details: Dict[str, Any],
+    subject: str = "Order Confirmation - SwasthyaSarthi"
+) -> Dict[str, Any]:
+    """
+    Send order confirmation email using Gmail SMTP.
+    
+    Args:
+        to_email: Recipient email address
+        order_details: Dictionary containing order information
+        subject: Email subject line
+    
+    Returns:
+        dict: Status of the email sending
+    """
+    if not GMAIL_EMAIL or not GMAIL_APP_PASSWORD:
+        return {
+            "success": False,
+            "error": "Gmail not configured. Set GMAIL_EMAIL and GMAIL_APP_PASSWORD in .env"
+        }
+    
+    # Email content template
+    email_body = f"""
+Dear Customer,
+
+Thank you for your order with SwasthyaSarthi!
+
+Order Details:
+--------------
+Order ID: {order_details.get('order_id', 'N/A')}
+Date: {order_details.get('date', 'N/A')}
+Items:
+{format_order_items(order_details.get('items', []))}
+
+Total Amount: ₹{order_details.get('total', 0)}
+
+Shipping Address:
+{order_details.get('address', 'N/A')}
+
+Your order will be processed and shipped soon.
+
+Thank you for choosing SwasthyaSarthi!
+
+Best regards,
+SwasthyaSarthi Team
+    """
+    
+    try:
+        # Create email message
+        msg = MIMEMultipart()
+        msg['From'] = GMAIL_EMAIL
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        
+        # Attach body
+        msg.attach(MIMEText(email_body, 'plain'))
+        
+        # Connect to Gmail SMTP server
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()  # Upgrade connection to secure
+        
+        # Login
+        server.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
+        
+        # Send email
+        server.sendmail(GMAIL_EMAIL, to_email, msg.as_string())
+        
+        # Quit server
+        server.quit()
+        
+        return {"success": True, "message": "Email sent successfully via Gmail"}
+        
+    except smtplib.SMTPAuthenticationError:
+        return {
+            "success": False, 
+            "error": "Gmail authentication failed. Make sure you're using an App Password, not your regular password."
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def send_simple_email(
+    to_email: str,
+    subject: str,
+    body: str
+) -> Dict[str, Any]:
+    """
+    Send a simple email using Gmail SMTP.
+    
+    Args:
+        to_email: Recipient email address
+        subject: Email subject
+        body: Email body
+    
+    Returns:
+        dict: Status of the email sending
+    """
+    if not GMAIL_EMAIL or not GMAIL_APP_PASSWORD:
+        return {
+            "success": False,
+            "error": "Gmail not configured. Set GMAIL_EMAIL and GMAIL_APP_PASSWORD in .env"
+        }
+    
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = GMAIL_EMAIL
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+        
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
+        server.sendmail(GMAIL_EMAIL, to_email, msg.as_string())
+        server.quit()
+        
+        return {"success": True, "message": "Email sent successfully"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def send_order_confirmation_sms(
+    phone_number: str,
+    order_details: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Send order confirmation SMS.
+    """
+    if not SMS_API_KEY:
+        return {
+            "success": False,
+            "error": "SMS API not configured. Set SMS_API_KEY in .env"
+        }
+    
+    message = f"SwasthyaSarthi: Your order #{order_details.get('order_id', '')} confirmed! "
+    message += f"Total: ₹{order_details.get('total', 0)}. "
+    message += "We'll notify you when it's shipped."
+    
+    try:
+        account_sid = SMS_API_KEY.split(':')[0] if ':' in SMS_API_KEY else SMS_API_KEY
+        auth_token = SMS_API_KEY.split(':')[1] if ':' in SMS_API_KEY else ''
+        
+        response = requests.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+            auth=(account_sid, auth_token),
+            data={
+                "To": phone_number,
+                "From": "+1234567890",
+                "Body": message
+            },
+            timeout=30
+        )
+        
+        if response.status_code in [200, 201]:
+            return {"success": True, "message": "SMS sent successfully"}
+        else:
+            return {"success": False, "error": f"SMS API error: {response.status_code}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def send_generic_webhook(
+    webhook_url: str,
+    payload: Dict[str, Any],
+    headers: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """Send a generic webhook to any URL."""
+    default_headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "SwasthyaSarthi/1.0"
+    }
+    
+    if headers:
+        default_headers.update(headers)
+    
+    try:
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            headers=default_headers,
+            timeout=30
+        )
+        
+        if response.status_code < 400:
+            return {"success": True, "status_code": response.status_code}
+        else:
+            return {"success": False, "error": f"Webhook error: {response.status_code}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def format_order_items(items: list) -> str:
+    """Format order items for display"""
+    if not items:
+        return "No items"
+    
+    formatted = []
+    for item in items:
+        formatted.append(
+            f"- {item.get('name', 'Unknown')} x {item.get('quantity', 1)} = ₹{item.get('price', 0)}"
+        )
+    return "\n".join(formatted)
+
+
+def trigger_order_notifications(
+    order_details: Dict[str, Any],
+    channels: list = ["email"]
+) -> Dict[str, Any]:
+    """
+    Trigger order notifications across multiple channels.
+    """
+    results = {
+        "order_id": order_details.get("order_id"),
+        "notifications": {}
+    }
+    
+    # Email notification (Gmail)
+    if "email" in channels and order_details.get("customer_email"):
+        results["notifications"]["email"] = send_order_confirmation_email(
+            to_email=order_details["customer_email"],
+            order_details=order_details
+        )
+    
+    # SMS notification
+    if "sms" in channels and order_details.get("customer_phone"):
+        results["notifications"]["sms"] = send_order_confirmation_sms(
+            phone_number=order_details["customer_phone"],
+            order_details=order_details
+        )
+    
+    # Generic webhook
+    if "webhook" in channels and order_details.get("webhook_url"):
+        webhook_payload = {
+            "event": "order_confirmed",
+            "order": order_details
+        }
+        results["notifications"]["webhook"] = send_generic_webhook(
+            webhook_url=order_details["webhook_url"],
+            payload=webhook_payload
+        )
+    
+    # Always trigger fulfillment
+    results["notifications"]["fulfillment"] = trigger_fulfillment(
+        order_details.get("order_id", "unknown")
+    )
+    
+    return results
+
+
+__all__ = [
+    'trigger_fulfillment',
+    'send_order_confirmation_email',
+    'send_simple_email',
+    'send_order_confirmation_sms',
+    'send_generic_webhook',
+    'trigger_order_notifications',
+    'set_gmail_config',
+    'set_sms_config'
+]

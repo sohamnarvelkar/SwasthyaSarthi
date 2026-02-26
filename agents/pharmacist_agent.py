@@ -1,10 +1,11 @@
 """
-Pharmacist Agent - Parses user order requests into structured data.
+Pharmacist Agent - Parses user order requests into structured data and provides medicine information.
 Uses unified LLM provider with LangSmith observability for traceability.
 """
 from agents.llm_provider import get_llm, invoke_with_trace, is_tracing_enabled, _get_langsmith_config
 from agents.state_schema import AgentState
 from langchain_core.messages import HumanMessage, SystemMessage
+from tools.inventory_tool import get_medicine
 import json
 import re
 
@@ -18,23 +19,74 @@ LANGUAGE_NAMES = {
     "gu": "Gujarati"
 }
 
+# Human-friendly response templates
+INFO_RESPONSES = {
+    "en": "Sure! Let me check about {product} for you.",
+    "hi": "ज़रूर! मैं {product} के बारे में देखता हूं।",
+    "mr": "नक्की! मी {product} बद्दल पाहतो.",
+    "bn": "অবশ্যই! আমি {product} সম্পর্কে দেখছি।",
+    "ml": "തീര്‍ച്ചയായി! ഞാന്‍ {product} എന്നതിനെക്കുറിച്ച് പരിശോധിക്കാം.",
+    "gu": "ખાતર! હું {product} વિશે જોઈશ."
+}
+
 def get_language_prompt_suffix(user_language: str) -> str:
     """Get the language-specific instruction for the LLM."""
     lang_name = LANGUAGE_NAMES.get(user_language, "English")
     if lang_name == "English":
-        return "Respond in English."
-    return f"Respond in {lang_name}."
+        return "Respond in English in a friendly, conversational way."
+    return f"Respond in {lang_name} in a friendly, conversational way."
+
+def _is_order_intent(user_text: str) -> bool:
+    """Check if the user wants to order medicine or just asking for information."""
+    text_lower = user_text.lower()
+    
+    # Order intent keywords
+    order_keywords = [
+        "order", "buy", "purchase", "get", "want", "need",
+        "place order", "order now", "buy now", "can i get",
+        "i want to order", "i want to buy", "please order",
+        "i need", "can i have", "give me", "arrange"
+    ]
+    
+    # Information/query intent keywords  
+    info_keywords = [
+        "information", "info", "details", "tell me about",
+        "what is", "what are", "how does", "explain",
+        "price", "cost", "availability", "in stock",
+        "do you have", "do you have any", "available",
+        "prescription", "side effects", "uses", "benefits"
+    ]
+    
+    # Check for order intent first (higher priority)
+    for keyword in order_keywords:
+        if keyword in text_lower:
+            return True
+    
+    # Check if it's purely informational
+    for keyword in info_keywords:
+        if keyword in text_lower:
+            # If combined with "just", "only", "know", etc. it's info intent
+            if "just" in text_lower or "only" in text_lower or "know" in text_lower:
+                return False
+    
+    # If unclear, assume order intent (they might want to buy)
+    return True
+
+def _get_info_response(user_language: str, product_name: str) -> str:
+    """Get a friendly informational response in the user's language."""
+    lang_code = user_language if user_language in INFO_RESPONSES else "en"
+    template = INFO_RESPONSES.get(lang_code, INFO_RESPONSES["en"])
+    return template.format(product=product_name)
 
 def pharmacist_agent(state: AgentState) -> AgentState:
     """
-    Parse the user's conversational request into structured order data.
+    Parse the user's conversational request into structured order data OR
+    provide medicine information if user is just asking.
     Uses LangSmith tracing to see chain of thoughts in dashboard.
     
-    Handles messy, human-like dialogue and extracts:
-    - product_name: medicine name
-    - quantity: number of units
-    - dosage: dosage instructions if mentioned
-    - patient_id: patient identifier if mentioned
+    Handles two types of requests:
+    1. Order requests: "I want to buy X" -> parse into structured order
+    2. Information requests: "Tell me about X" -> provide medicine info
     """
     user_text = state.get("user_input", "")
     user_language = state.get("user_language", "en")
@@ -42,7 +94,12 @@ def pharmacist_agent(state: AgentState) -> AgentState:
 
     if not user_text:
         state["structured_order"] = {}
+        state["is_info_request"] = False
         return state
+
+    # Determine if user wants to order or just asking for info
+    is_order = _is_order_intent(user_text)
+    state["is_order_request"] = is_order
 
     # Try to use LLM for parsing with full observability
     llm = get_llm()
@@ -50,13 +107,13 @@ def pharmacist_agent(state: AgentState) -> AgentState:
     if llm is None:
         # Fallback to rule-based parsing when no LLM is available
         print("[Pharmacist Agent] Using rule-based parsing (no LLM)")
-        parsed = _rule_based_parse(user_text)
+        parsed = _rule_based_parse(user_text, is_order)
         state["structured_order"] = parsed
         return state
 
-    # Enhanced prompt for better conversational understanding
-    # This prompt and its response will be tracked in LangSmith
-    prompt = f'''You are a pharmacy assistant. Parse this customer's order request and extract structured information.
+    if is_order:
+        # Order intent - parse the order
+        prompt = f'''You are a pharmacy assistant. Parse this customer's order request and extract structured information.
 
 Customer said: "{user_text}"
 
@@ -71,14 +128,20 @@ Extract the following information:
 
 Return ONLY a JSON object with these exact keys:
 {{"product_name": "...", "quantity": 1, "dosage": "...", "patient_name": "...", "notes": "..."}}'''
+    else:
+        # Info intent - just acknowledge and let safety agent provide details
+        prompt = f'''The user is asking for information about a medicine.
+
+Customer said: "{user_text}"
+
+Simply acknowledge their query in a friendly way. Return ONLY a JSON:
+{{"acknowledgment": "Your friendly acknowledgment message", "product_name": "the medicine name they asked about"}}'''
 
     try:
         # Use invoke_with_trace for full LangSmith observability
-        # This will show the chain of thoughts in LangSmith dashboard
         response_content = invoke_with_trace(prompt, agent_name="pharmacist")
         
         if response_content is None:
-            # Fallback if tracing fails
             response = llm.invoke(
                 [SystemMessage(content=prompt)] if 'SystemMessage' in dir() else [HumanMessage(content=prompt)],
                 config=_get_langsmith_config()
@@ -97,34 +160,44 @@ Return ONLY a JSON object with these exact keys:
             else:
                 parsed = {"product_name": content, "quantity": 1, "dosage": "", "patient_name": "", "notes": ""}
 
-        # Ensure all keys exist
         if not isinstance(parsed, dict):
             parsed = {"product_name": str(parsed), "quantity": 1, "dosage": "", "patient_name": "", "notes": ""}
 
-        # Clean up the product name
-        if parsed.get("product_name"):
-            product_name = parsed["product_name"].strip()
-            parsed["product_name"] = _match_medicine_name(product_name)
+        if is_order:
+            # Clean up the product name
+            if parsed.get("product_name"):
+                product_name = parsed["product_name"].strip()
+                parsed["product_name"] = _match_medicine_name(product_name)
 
-        state["structured_order"] = {
-            "product_name": parsed.get("product_name", ""),
-            "quantity": parsed.get("quantity", 1),
-            "dosage": parsed.get("dosage", ""),
-            "patient_name": parsed.get("patient_name", ""),
-            "notes": parsed.get("notes", "")
-        }
-
-        print(f"[Pharmacist Agent] Parsed order: {state['structured_order']}")
+            state["structured_order"] = {
+                "product_name": parsed.get("product_name", ""),
+                "quantity": parsed.get("quantity", 1),
+                "dosage": parsed.get("dosage", ""),
+                "patient_name": parsed.get("patient_name", ""),
+                "notes": parsed.get("notes", "")
+            }
+            print(f"[Pharmacist Agent] Parsed order: {state['structured_order']}")
+        else:
+            # Info request - set up response
+            product_name = parsed.get("product_name", "")
+            if product_name:
+                matched_name = _match_medicine_name(product_name)
+                state["info_product"] = matched_name
+                state["info_response"] = _get_info_response(user_language, matched_name)
+            else:
+                state["info_product"] = _rule_based_parse(user_text, True).get("product_name", "")
+                state["info_response"] = _get_info_response(user_language, state["info_product"])
+            print(f"[Pharmacist Agent] Info request for: {state['info_product']}")
 
     except Exception as e:
         print(f"Pharmacist agent error: {e}")
-        parsed = _rule_based_parse(user_text)
+        parsed = _rule_based_parse(user_text, is_order)
         state["structured_order"] = parsed
 
     return state
 
 
-def _rule_based_parse(user_text: str) -> dict:
+def _rule_based_parse(user_text: str, is_order: bool = True) -> dict:
     """Rule-based parsing fallback when no LLM is available."""
     text_lower = user_text.lower()
 

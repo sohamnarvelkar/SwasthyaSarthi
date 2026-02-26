@@ -1,15 +1,62 @@
-from fastapi import FastAPI, Depends, Query
+from fastapi import FastAPI, Depends, Query, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from passlib.context import CryptContext
 from .database import Base, engine, SessionLocal
-from .models import Medicine, Order, Patient, RefillAlert
+from .models import Medicine, Order, Patient, RefillAlert, User
 from .seed_loader import seed_data
 from datetime import datetime, timedelta
+from typing import Optional
+from jose import JWTError, jwt
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tools.webhook_tool import send_order_confirmation_email
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+SECRET_KEY = "your-secret-key-change-in-production"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# OAuth2 scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def validate_password(password: str) -> tuple[bool, str]:
+    """
+    Validate password against security rules.
+    Returns (is_valid, error_message)
+    """
+    if len(password) < 4:
+        return False, "Password must be at least 4 characters long"
+    return True, ""
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
 # Initialize DB and seed data
 Base.metadata.create_all(bind=engine)
-seed_data()
 
 app = FastAPI()
+
+# Seed data disabled - uncomment if needed
+# try:
+#     seed_data()
+# except Exception as e:
+#     print(f"Warning: Could not seed data: {e}")
 
 def get_db():
     db = SessionLocal()
@@ -17,6 +64,33 @@ def get_db():
         yield db
     finally:
         db.close()
+
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
+async def get_admin_user(current_user: User = Depends(get_current_user)):
+    """Dependency to ensure the current user is an admin."""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required"
+        )
+    return current_user
 
 # ==================== MEDICINE ENDPOINTS ====================
 
@@ -46,10 +120,27 @@ def create_order(patient_id: str, product_name: str, quantity: int, db: Session 
     med = db.query(Medicine).filter(Medicine.name == product_name).first()
     if not med or med.stock < quantity:
         return {"status": "failed", "reason": "out_of_stock_or_not_found"}
+    
+    # Get patient info for email
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    
     med.stock -= quantity
     order = Order(patient_id=patient_id, product_name=product_name, quantity=quantity, status="CREATED")
     db.add(order)
     db.commit()
+    
+    # Send order confirmation email if patient has email
+    if patient and patient.email:
+        order_details = {
+            "order_id": order.id,
+            "date": datetime.now().isoformat(),
+            "items": [{"name": product_name, "quantity": quantity, "price": med.price}],
+            "total": round(med.price * quantity, 2),
+            "address": patient.address or "N/A",
+            "customer_email": patient.email
+        }
+        send_order_confirmation_email(patient.email, order_details)
+    
     return {"status": "success", "order_id": order.id, "price": round(med.price * quantity, 2)}
 
 # ==================== PATIENT ENDPOINTS ====================
@@ -109,9 +200,8 @@ def check_refills(days_ahead: int = Query(default=3, description="Days ahead to 
                 continue
             
             # Calculate refill date (simplified - assumes 30 days supply)
-            # In real app, would use dosage frequency from history
             days_since_order = (now - order.order_date).days if order.order_date else 0
-            days_until_refill = 30 - days_since_order  # Assume 30 day supply
+            days_until_refill = 30 - days_since_order
             
             if 0 <= days_until_refill <= days_ahead:
                 alerts.append({
@@ -162,6 +252,128 @@ def update_refill_alert(alert_id: int, status: str, db: Session = Depends(get_db
     alert.status = status
     db.commit()
     return {"status": "success"}
+
+# ==================== AUTHENTICATION ENDPOINTS ====================
+
+@app.post("/register", status_code=status.HTTP_201_CREATED)
+def register(email: str, password: str, full_name: str = None, db: Session = Depends(get_db)):
+    """Register a new user with email and password."""
+    # Validate password strength
+    is_valid, error_msg = validate_password(password)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+    
+    # Check if user already exists
+    existing_user = db.query(User).filter(User.email == email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Simple hash for testing - store password directly (not recommended for production)
+    hashed_password = password  # Using plain password for testing
+    
+    # Create new user (regular user by default)
+    user = User(
+        email=email,
+        hashed_password=hashed_password,
+        full_name=full_name,
+        is_active=True,
+        is_admin=False
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    
+    return {"message": "User registered successfully", "user_id": user.id, "email": user.email}
+
+@app.post("/register-admin", status_code=status.HTTP_201_CREATED)
+def register_admin(email: str, password: str, full_name: str = None, db: Session = Depends(get_db)):
+    """Register a new admin user."""
+    # Validate password strength
+    is_valid, error_msg = validate_password(password)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+    
+    # Check if user already exists
+    existing_user = db.query(User).filter(User.email == email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    hashed_password = password
+    
+    # Create new admin user
+    user = User(
+        email=email,
+        hashed_password=hashed_password,
+        full_name=full_name,
+        is_active=True,
+        is_admin=True
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    
+    return {"message": "Admin user registered successfully", "user_id": user.id, "email": user.email}
+
+@app.post("/token")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """Login and get access token."""
+    user = db.query(User).filter(User.email == form_data.username).first()
+    if not user or form_data.password != user.hashed_password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/me")
+def get_current_user_info(current_user: User = Depends(get_current_user)):
+    """Get current user information."""
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "is_active": current_user.is_active,
+        "is_admin": current_user.is_admin,
+        "created_at": current_user.created_at.isoformat() if current_user.created_at else None
+    }
+
+# ==================== ADMIN ENDPOINTS ====================
+
+@app.get("/admin/users")
+def get_all_users(db: Session = Depends(get_db), current_user: User = Depends(get_admin_user)):
+    """Get all users (admin only)."""
+    users = db.query(User).all()
+    return [{"id": u.id, "email": u.email, "full_name": u.full_name,
+             "is_active": u.is_active, "is_admin": u.is_admin,
+             "created_at": u.created_at.isoformat() if u.created_at else None} for u in users]
+
+@app.put("/admin/users/{user_id}/make-admin")
+def make_user_admin(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_admin_user)):
+    """Make a user an admin (admin only)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_admin = True
+    db.commit()
+    return {"message": f"User {user.email} is now an admin"}
+
+@app.put("/admin/users/{user_id}/remove-admin")
+def remove_user_admin(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_admin_user)):
+    """Remove admin privileges from a user (admin only)."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_admin = False
+    db.commit()
+    return {"message": f"Admin privileges removed from {user.email}"}
 
 # ==================== ORDER ENDPOINTS ====================
 

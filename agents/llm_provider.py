@@ -1,10 +1,9 @@
 """
-Unified LLM Provider with LangSmith Observability.
-Tries Anthropic first, then falls back to rule-based parsing if it fails.
+Unified LLM Provider with Ollama (local).
+Uses only Ollama for local LLM inference.
 Tracks all LLM calls with LangSmith for agent traceability.
 """
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from dotenv import load_dotenv
@@ -50,95 +49,25 @@ def _get_langsmith_config():
     return RunnableConfig()
 
 
-def _get_anthropic_llm():
-    """Get Anthropic LLM with LangSmith observability."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not found in environment")
-    return ChatAnthropic(
-        model="claude-3-5-sonnet-20241022",
-        api_key=api_key,
+def _get_ollama_llm():
+    """Get Ollama LLM (local)."""
+    return ChatOllama(
+        model="llama3:8b",
         temperature=0
     )
 
 
-def _get_openai_llm():
-    """Get OpenAI LLM with LangSmith observability."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY not found in environment")
-    return ChatOpenAI(
-        model="gpt-4o",
-        temperature=0,
-        api_key=api_key
-    )
-
-
-def _get_ollama_llm():
-    """Get Ollama LLM (local) - only if available."""
-    try:
-        from langchain_ollama import ChatOllama
-        return ChatOllama(
-            model="llama3.2",
-            temperature=0
-        )
-    except ImportError as e:
-        print(f"[LLM Provider] Ollama import error: {e}")
-        raise
-
-
 def get_llm():
     """
-    Get an LLM instance with automatic fallback.
-    Tries Anthropic first, then OpenAI, then falls back to Ollama or rule-based.
-    All LLM calls are traced via LangSmith.
+    Get an LLM instance using Ollama (local).
+    Returns None if Ollama is not available.
     """
     global _llm, _llm_type
     
     if _llm is not None:
         return _llm
     
-    # Try Anthropic first
-    try:
-        _llm = _get_anthropic_llm()
-        _llm_type = "anthropic"
-        
-        # Test the LLM with a simple call
-        test_response = _llm.invoke(
-            [HumanMessage(content="Hi")],
-            config=_get_langsmith_config()
-        )
-        print(f"[LLM Provider] Using Anthropic Claude with LangSmith tracing")
-        return _llm
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "credit" in error_msg or "insufficient" in error_msg or "billing" in error_msg:
-            print(f"[LLM Provider] Anthropic credits issue: {e}")
-            print(f"[LLM Provider] Trying OpenAI...")
-        elif "invalid_request_error" in error_msg:
-            print(f"[LLM Provider] Anthropic error: {e}")
-            print(f"[LLM Provider] Trying OpenAI...")
-        else:
-            print(f"[LLM Provider] Anthropic error: {e}")
-            print(f"[LLM Provider] Trying OpenAI...")
-    
-    # Try OpenAI as fallback
-    try:
-        _llm = _get_openai_llm()
-        _llm_type = "openai"
-        
-        # Test the LLM
-        test_response = _llm.invoke(
-            [HumanMessage(content="Hi")],
-            config=_get_langsmith_config()
-        )
-        print(f"[LLM Provider] Using OpenAI GPT-4o with LangSmith tracing")
-        return _llm
-    except Exception as e:
-        print(f"[LLM Provider] OpenAI error: {e}")
-        print(f"[LLM Provider] Trying Ollama...")
-    
-    # Try Ollama as fallback
+    # Try Ollama (local LLM)
     try:
         _llm = _get_ollama_llm()
         _llm_type = "ollama"

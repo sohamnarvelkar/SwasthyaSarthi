@@ -1,38 +1,39 @@
-# Core Backend
-fastapi==0.110.0
-uvicorn==0.29.0
-sqlalchemy==2.0.29
-pydantic==2.7.4
+# Web Framework
+fastapi==0.109.0
+uvicorn==0.27.0
 
-# Data Processing (Excel datasets only)
-pandas==2.2.2
-openpyxl==3.1.2
+# Database
+sqlalchemy==2.0.25
 
-# Multi-Agent + LLM
-langchain==0.3.0
-langchain-core==0.3.0
-langchain-community==0.3.0
-langchain-openai==0.1.7
-langchain-anthropic==0.3.0
-langgraph==0.2.0
+# Authentication
+passlib==1.7.4
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.6
 
-openai==1.30.1
-python-dotenv==1.0.1
+# Frontend
+streamlit==1.30.0
 
-# Frontend UI
-streamlit==1.35.0
-
-# API Tools
+# HTTP Client
 requests==2.31.0
 
-# Voice + Multilingual (Best Quality)
-gTTS==2.5.1
-SpeechRecognition==3.10.1
-pydub==0.25.1
-faster-whisper==1.0.3
-edge-tts==6.1.12
-sounddevice==0.4.6
-numpy==1.26.4
+# Data Processing
+pandas==2.2.0
+numpy==1.26.3
 
-# Observability (Agent Tracing)
-langsmith==0.1.147
+# AI/LLM
+langchain>=0.3.0
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-ollama>=0.2.0
+
+# Environment
+python-dotenv==1.0.1
+
+# Audio
+edge-tts==6.1.10
+
+# Email
+PyJWT==2.8.0
+
+# Data Validation
+pydantic>=2.0

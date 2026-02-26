@@ -11,13 +11,19 @@ try:
     SOUNDDEVICE_AVAILABLE = True
 except ImportError:
     SOUNDDEVICE_AVAILABLE = False
-    st.warning("sounddevice not installed. Run: pip install sounddevice")
 
 try:
     from faster_whisper import WhisperModel
     FASTER_WHISPER_AVAILABLE = True
 except ImportError:
     FASTER_WHISPER_AVAILABLE = False
+
+
+def show_sounddevice_warning():
+    """Show warning about missing sounddevice if not available."""
+    if not SOUNDDEVICE_AVAILABLE:
+        import streamlit as st
+        st.warning("sounddevice not installed. Run: pip install sounddevice")
 
 # Language code mapping for Whisper
 LANGUAGE_CODES = {

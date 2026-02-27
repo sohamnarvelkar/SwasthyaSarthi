@@ -45,6 +45,17 @@ class RefillAlert(Base):
     alert_date = Column(DateTime, default=datetime.now)
     status = Column(String, default="pending")
 
+class ProcurementLog(Base):
+    __tablename__ = "procurement_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    product_name = Column(String, index=True)
+    quantity_triggered = Column(Integer)
+    current_stock = Column(Integer)
+    threshold = Column(Integer, default=10)
+    status = Column(String, default="pending")  # pending, ordered, received
+    order_date = Column(DateTime, default=datetime.now)
+    notes = Column(String)
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)

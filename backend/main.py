@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from .database import Base, engine, SessionLocal
-from .models import Medicine, Order, Patient, RefillAlert, User
+from .models import Medicine, Order, Patient, RefillAlert, User, ProcurementLog
 from .seed_loader import seed_data
 from datetime import datetime, timedelta
 from typing import Optional
@@ -387,3 +387,35 @@ def get_orders(patient_id: str = None, db: Session = Depends(get_db)):
     return [{"id": o.id, "patient_id": o.patient_id, "product_name": o.product_name,
              "quantity": o.quantity, "status": o.status, 
              "order_date": o.order_date.isoformat() if o.order_date else None} for o in orders]
+
+# ==================== PROCUREMENT ENDPOINTS ====================
+
+@app.post("/auto-procurement")
+def trigger_auto_procurement(threshold: int = Query(default=10, description="Stock threshold to trigger procurement")):
+    """Trigger automatic procurement check for low stock items."""
+    try:
+        from tools.procurement_tool import check_and_trigger_procurement
+        result = check_and_trigger_procurement(threshold=threshold)
+        return {"status": "success", "result": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/procurement-logs")
+def get_procurement_logs(status: str = None, limit: int = 50):
+    """Get procurement logs."""
+    try:
+        from tools.procurement_tool import get_procurement_logs
+        logs = get_procurement_logs(status=status, limit=limit)
+        return {"logs": logs, "count": len(logs)}
+    except Exception as e:
+        return {"error": str(e), "logs": []}
+
+@app.put("/procurement-logs/{log_id}")
+def update_procurement_log(log_id: int, status: str, notes: str = None):
+    """Update procurement log status."""
+    try:
+        from tools.procurement_tool import update_procurement_status
+        success = update_procurement_status(log_id, status, notes)
+        return {"status": "success" if success else "failed"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

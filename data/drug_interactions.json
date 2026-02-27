@@ -1,0 +1,84 @@
+{
+  "interactions": [
+    {
+      "drug1": "Paracetamol",
+      "drug2": "Ibuprofen",
+      "severity": "moderate",
+      "description": "Increased risk of kidney damage when taken together",
+      "recommendation": "Consult doctor before combining"
+    },
+    {
+      "drug1": "Paracetamol",
+      "drug2": "Aspirin",
+      "severity": "moderate",
+      "description": "May increase risk of stomach bleeding",
+      "recommendation": "Use with caution, monitor for bleeding"
+    },
+    {
+      "drug1": "Ibuprofen",
+      "drug2": "Aspirin",
+      "severity": "severe",
+      "description": "Significantly increases risk of gastrointestinal bleeding",
+      "recommendation": "Avoid combination unless prescribed by doctor"
+    },
+    {
+      "drug1": "Warfarin",
+      "drug2": "Aspirin",
+      "severity": "severe",
+      "description": "Dramatically increases bleeding risk",
+      "recommendation": "Never combine without medical supervision"
+    },
+    {
+      "drug1": "Digoxin",
+      "drug2": "Verapamil",
+      "severity": "moderate",
+      "description": "May increase digoxin levels, leading to toxicity",
+      "recommendation": "Monitor digoxin levels closely"
+    },
+    {
+      "drug1": "Simvastatin",
+      "drug2": "Amiodarone",
+      "severity": "moderate",
+      "description": "Increased risk of muscle damage (rhabdomyolysis)",
+      "recommendation": "Lower simvastatin dose may be needed"
+    },
+    {
+      "drug1": "Theophylline",
+      "drug2": "Ciprofloxacin",
+      "severity": "moderate",
+      "description": "May increase theophylline levels, causing side effects",
+      "recommendation": "Monitor theophylline levels"
+    },
+    {
+      "drug1": "Lithium",
+      "drug2": "ACE inhibitors",
+      "severity": "moderate",
+      "description": "May increase lithium levels",
+      "recommendation": "Monitor lithium levels"
+    },
+    {
+      "drug1": "Beta-blockers",
+      "drug2": "Calcium channel blockers",
+      "severity": "moderate",
+      "description": "May cause excessive blood pressure lowering",
+      "recommendation": "Monitor blood pressure closely"
+    },
+    {
+      "drug1": "SSRI antidepressants",
+      "drug2": "NSAIDs",
+      "severity": "moderate",
+      "description": "Increased risk of bleeding",
+      "recommendation": "Use with caution"
+    }
+  ],
+  "categories": {
+    "pain_relievers": ["Paracetamol", "Ibuprofen", "Aspirin", "Diclofenac"],
+    "blood_thinners": ["Warfarin", "Aspirin"],
+    "heart_medications": ["Digoxin", "Verapamil", "Amiodarone", "Beta-blockers", "ACE inhibitors"],
+    "antibiotics": ["Ciprofloxacin"],
+    "asthma_medications": ["Theophylline"],
+    "mood_stabilizers": ["Lithium"],
+    "antidepressants": ["SSRI antidepressants"],
+    "cholesterol_medications": ["Simvastatin"]
+  }
+}

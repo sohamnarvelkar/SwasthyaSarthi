@@ -367,27 +367,31 @@ else:
                 if st.button("✅ Yes, Place My Order", key="confirm_order_btn"):
                     try:
                         with st.spinner("Placing your order..."):
-                            result = app_graph.invoke({
-                                "user_input": "yes",
-                                "user_id": st.session_state.user_email,
-                                "user_phone": None,
-                                "user_email": st.session_state.user_email,
-                                "user_language": lang_code_map.get(lang_choice, "en"),
-                                "user_address": None,
-                                "structured_order": {"product_name": pending_order.get("product_name"), "quantity": pending_order.get("quantity")},
-                                "safety_result": {"approved": True},
-                                "final_response": "",
-                                "is_proactive": False,
-                                "refill_alerts": [],
-                                "requires_confirmation": True,
-                                "confirmation_message": "",
-                                "user_confirmed": True,
-                                "pending_order_details": pending_order,
-                                "agent_trace": st.session_state.agent_trace,
-                                "is_order_request": True,
-                                "info_product": "",
-                                "info_response": ""
-                            })
+                            result = app_graph.invoke(
+                                {
+                                    "user_input": "yes",
+                                    "user_id": st.session_state.user_email,
+                                    "user_phone": None,
+                                    "user_email": st.session_state.user_email,
+                                    "user_language": lang_code_map.get(lang_choice, "en"),
+                                    "user_address": None,
+                                    "structured_order": {"product_name": pending_order.get("product_name"), "quantity": pending_order.get("quantity")},
+                                    "safety_result": {"approved": True},
+                                    "final_response": "",
+                                    "is_proactive": False,
+                                    "refill_alerts": [],
+                                    "requires_confirmation": True,
+                                    "confirmation_message": "",
+                                    "user_confirmed": True,
+                                    "pending_order_details": pending_order,
+                                    "agent_trace": st.session_state.agent_trace,
+                                    "is_order_request": True,
+                                    "info_product": "",
+                                    "info_response": ""
+                                },
+                                config={"configurable": {"thread_id": f"{st.session_state.user_email}:session"}}
+                            )
+
                             reply = result.get("final_response", "")
                             st.session_state.history.append(("SwasthyaSarthi", reply))
                             st.session_state.pending_order = None
@@ -435,27 +439,31 @@ else:
                 
                 try:
                     with st.spinner("🤖 Let me help you with that..."):
-                        result = app_graph.invoke({
-                            "user_input": final_input,
-                            "user_id": st.session_state.user_email,
-                            "user_phone": None,
-                            "user_email": st.session_state.user_email,
-                            "user_language": lang_code_map.get(lang_choice, "en"),
-                            "user_address": None,
-                            "structured_order": {},
-                            "safety_result": {},
-                            "final_response": "",
-                            "is_proactive": False,
-                            "refill_alerts": [],
-                            "requires_confirmation": False,
-                            "confirmation_message": "",
-                            "user_confirmed": None,
-                            "pending_order_details": None,
-                            "agent_trace": [],
-                            "is_order_request": True,
-                            "info_product": "",
-                            "info_response": ""
-                        })
+                        result = app_graph.invoke(
+                            {
+                                "user_input": final_input,
+                                "user_id": st.session_state.user_email,
+                                "user_phone": None,
+                                "user_email": st.session_state.user_email,
+                                "user_language": lang_code_map.get(lang_choice, "en"),
+                                "user_address": None,
+                                "structured_order": {},
+                                "safety_result": {},
+                                "final_response": "",
+                                "is_proactive": False,
+                                "refill_alerts": [],
+                                "requires_confirmation": False,
+                                "confirmation_message": "",
+                                "user_confirmed": None,
+                                "pending_order_details": None,
+                                "agent_trace": [],
+                                "is_order_request": True,
+                                "info_product": "",
+                                "info_response": ""
+                            },
+                            config={"configurable": {"thread_id": f"{st.session_state.user_email}:session"}}
+                        )
+
                         
                         st.session_state.agent_trace = result.get("agent_trace", [])
                         

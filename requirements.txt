@@ -31,6 +31,11 @@ python-dotenv==1.0.1
 
 # Audio
 edge-tts==6.1.10
+faster-whisper==1.0.3
+sounddevice==0.4.9
+gTTS==2.5.1
+SpeechRecognition==3.10.4
+pyaudio==0.2.14
 
 # Email
 PyJWT==2.8.0

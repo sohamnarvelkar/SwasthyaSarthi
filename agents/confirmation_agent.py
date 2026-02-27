@@ -5,24 +5,27 @@ interaction more human-friendly like ChatGPT.
 """
 from agents.llm_provider import get_llm, invoke_with_trace, is_tracing_enabled, _get_langsmith_config
 from agents.state_schema import AgentState
+from tools.inventory_tool import get_medicine
 from langchain_core.messages import HumanMessage, SystemMessage
 import json
+
 
 # Language-specific response templates
 CONFIRMATION_TEMPLATES = {
     "en": {
         "confirm_prompt": 'You are confirming an order. The user said "{user_input}". Does this contain a confirmation word like "yes", "confirm", "place order", "order now", "proceed", "ok", "sure", "okay", "please do", "go ahead"? Return ONLY a JSON with keys: "confirmed" (true/false) and "response" (a friendly message).',
-        "pending_message": "I understand you'd like to order {product} x {quantity}. Could you please confirm by saying 'yes' or 'confirm' to place this order? You can also say 'cancel' to abort."
+        "pending_message": "I understand you'd like to order {product} x {quantity} (₹{unit_price:.2f} per unit, Total: ₹{total_price:.2f}). Could you please confirm by saying 'yes' or 'confirm' to place this order? You can also say 'cancel' to abort."
     },
     "hi": {
         "confirm_prompt": 'आप एक ऑर्डर की पुष्टि कर रहे हैं। उपयोगकर्ता ने कहा "{user_input}"। क्या इसमें "yes", "confirm", "place order", "order now", "proceed", "ok", "sure" जैसा कोई शब्द है? केवल JSON रिटर्न करें: "confirmed" और "response"।',
-        "pending_message": "मैं समझता हूं कि आप {product} x {quantity} ऑर्डर करना चाहेंगे। कृपया 'yes' या 'confirm' कहकर इस ऑर्डर की पुष्टि करें? आप 'cancel' भी कह सकते हैं।"
+        "pending_message": "मैं समझता हूं कि आप {product} x {quantity} ऑर्डर करना चाहेंगे (₹{unit_price:.2f} प्रति यूनिट, कुल: ₹{total_price:.2f})। कृपया 'yes' या 'confirm' कहकर इस ऑर्डर की पुष्टि करें? आप 'cancel' भी कह सकते हैं।"
     },
     "mr": {
         "confirm_prompt": 'तुम एका ऑर्डरची पुष्टी करत आहात. वापरून म्हणाले "{user_input}". यात "yes", "confirm", "place order", "order now", "proceed", "ok", "sure" असा शब्द आहे का? फक्त JSON रिटर्न करा: "confirmed" आणि "response".',
-        "pending_message": "मी समजतो तुम्हाला {product} x {quantity} ऑर्डर करायचा आहे. कृपया 'yes' किंवा 'confirm' म्हणून या ऑर्डरची पुष्टी करा. तुम 'cancel' सुद्धा म्हणू शकता."
+        "pending_message": "मी समजतो तुम्हाला {product} x {quantity} ऑर्डर करायचा आहे (₹{unit_price:.2f} प्रति युनिट, एकूण: ₹{total_price:.2f}). कृपया 'yes' किंवा 'confirm' म्हणून या ऑर्डरची पुष्टी करा. तुम 'cancel' सुद्धा म्हणू शकता."
     }
 }
+
 
 def _get_language_config(user_language: str) -> dict:
     """Get confirmation templates for the user's language."""
@@ -200,19 +203,43 @@ def create_confirmation_message(state: AgentState, user_language: str = "en") ->
     """
     Create a friendly confirmation message for the user.
     This is called when a new order is being prepared.
+    Includes price information from the dataset.
     """
     order = state.get("structured_order", {})
     product = order.get("product_name", "this item")
     quantity = order.get("quantity", 1)
     
+    # Fetch price from dataset
+    unit_price = 0.0
+    total_price = 0.0
+    try:
+        med_info = get_medicine(product)
+        if med_info and med_info.get("price"):
+            unit_price = float(med_info.get("price", 0))
+            total_price = round(unit_price * quantity, 2)
+    except Exception as e:
+        print(f"[Confirmation Agent] Could not fetch price: {e}")
+    
     lang_config = _get_language_config(user_language)
     
     message = lang_config["pending_message"].format(
         product=product,
-        quantity=quantity
+        quantity=quantity,
+        unit_price=unit_price,
+        total_price=total_price
     )
     
+    # Store price details in state for later use
+    state["order_price_details"] = {
+        "unit_price": unit_price,
+        "total_price": total_price,
+        "currency": "INR",
+        "product_name": product,
+        "quantity": quantity
+    }
+    
     return message
+
 
 
 __all__ = ["confirmation_agent", "create_confirmation_message"]

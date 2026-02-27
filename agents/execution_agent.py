@@ -4,8 +4,10 @@ Uses LangSmith observability for traceability.
 """
 from tools.order_tool import create_order
 from tools.webhook_tool import trigger_fulfillment, trigger_order_notifications
+from tools.inventory_tool import get_medicine
 from agents.state_schema import AgentState
 from agents.llm_provider import invoke_with_trace, is_tracing_enabled
+
 
 
 def execution_agent(state: AgentState) -> AgentState:
@@ -90,23 +92,57 @@ Determine the final response to return to the user."""
         state["agent_trace"].append(trace_entry)
         return state
     
-    print(f"[Execution Agent] Creating order: {product_name} x{quantity} for {patient_id}")
+    # Fetch medicine info from inventory to get price from dataset
+    print(f"[Execution Agent] Fetching price for: {product_name}")
+    med_info = get_medicine(product_name)
+    
+    if not med_info:
+        state["final_response"] = f"Sorry, we couldn't find '{product_name}' in our inventory."
+        trace_entry["result"] = "medicine_not_found"
+        state["agent_trace"].append(trace_entry)
+        return state
+    
+    # Validate price is available from dataset
+    unit_price = med_info.get("price")
+    if unit_price is None or unit_price <= 0:
+        state["final_response"] = f"Sorry, price information is not available for '{product_name}'. Cannot process order."
+        trace_entry["result"] = "price_not_available"
+        state["agent_trace"].append(trace_entry)
+        return state
+    
+    # Calculate total price
+    total_price = round(unit_price * quantity, 2)
+    
+    # Store price details in agent state for observability
+    state["order_price_details"] = {
+        "unit_price": unit_price,
+        "total_price": total_price,
+        "currency": "INR",
+        "product_name": product_name,
+        "quantity": quantity
+    }
+    
+    print(f"[Execution Agent] Creating order: {product_name} x{quantity} for {patient_id} at ₹{total_price}")
     res = create_order(patient_id, product_name, quantity)
+
     
     if res.get("status") == "success":
         # Trigger fulfillment webhook
         trigger_fulfillment(f"{patient_id}-{product_name}")
         
-        # Prepare order details for notifications
+        # Prepare order details for notifications with price info
         order_details = {
             "order_id": res.get("order_id", f"{patient_id}-{product_name}"),
             "patient_id": patient_id,
             "items": [{
                 "name": product_name,
                 "quantity": quantity,
-                "price": res.get("price", 0)
+                "unit_price": unit_price,
+                "total_price": total_price
             }],
-            "total": res.get("price", 0),
+            "unit_price": unit_price,
+            "total_price": total_price,
+            "total": total_price,
             "date": res.get("date", "Now"),
             "customer_email": state.get("user_email", "customer@example.com"),
             "customer_phone": state.get("user_phone", "+1234567890"),
@@ -125,11 +161,35 @@ Determine the final response to return to the user."""
         except Exception as e:
             print(f"[Execution Agent] Notification error: {e}")
         
-        total_price = res.get("price", 0)
-        state["final_response"] = f"Order placed successfully! Total price: ₹{total_price:.2f}. You will receive a confirmation email shortly."
+        # Build detailed response with price breakdown
+        state["final_response"] = (
+            f"Your order has been placed successfully!\n\n"
+            f"📋 Order Details:\n"
+            f"• Medicine: {product_name}\n"
+            f"• Quantity: {quantity}\n"
+            f"• Price per unit: ₹{unit_price:.2f}\n"
+            f"• Total Price: ₹{total_price:.2f}\n\n"
+            f"You will receive a confirmation email shortly."
+        )
+        
+        # Add LangSmith observability metadata with pricing
         trace_entry["result"] = "success"
         trace_entry["order_id"] = res.get("order_id")
-        print(f"[Execution Agent] Order success: {res.get('order_id')}")
+        trace_entry["action"] = "order_created"
+        trace_entry["unit_price"] = unit_price
+        trace_entry["total_price"] = total_price
+        trace_entry["currency"] = "INR"
+        
+        # Update metadata for LangSmith
+        if "metadata" not in state:
+            state["metadata"] = {}
+        state["metadata"]["action"] = "order_created"
+        state["metadata"]["unit_price"] = unit_price
+        state["metadata"]["total_price"] = total_price
+        state["metadata"]["currency"] = "INR"
+        
+        print(f"[Execution Agent] Order success: {res.get('order_id')} - Total: ₹{total_price}")
+
     else:
         state["final_response"] = "Failed to place order. Please try again."
         trace_entry["result"] = "failed"

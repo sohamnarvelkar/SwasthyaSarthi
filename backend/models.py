@@ -20,8 +20,11 @@ class Order(Base):
     patient_id = Column(String)
     product_name = Column(String)
     quantity = Column(Integer)
+    unit_price = Column(Float)
+    total_price = Column(Float)
     status = Column(String)
     order_date = Column(DateTime, default=datetime.now)
+
 
 class Patient(Base):
     __tablename__ = "patients"

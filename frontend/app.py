@@ -15,8 +15,18 @@ from frontend.components.admin_panel import show_admin_dashboard
 from frontend.components.voice_input import record_voice, test_microphone
 from frontend.components.tts_helper import text_to_speech, VOICE_MAP, LANGUAGE_CODE_MAP
 
+# Voice Agent Components
+from frontend.components.voice_agent import (
+    render_voice_mode_ui, 
+    is_voice_mode_active, 
+    stop_voice_mode,
+    get_voice_input_text
+)
+from frontend.components.language_detector import detect_language, get_language_code
+
+
 # API Base URL
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = "http://localhost:8001"
 
 # MUST be the first Streamlit command
 st.set_page_config(page_title="SwasthyaSarthi", layout="wide", page_icon="🩺")
@@ -36,9 +46,14 @@ if 'is_admin' not in st.session_state:
     st.session_state.is_admin = False
 if 'lang_choice' not in st.session_state:
     st.session_state.lang_choice = "English"
+if 'interaction_mode' not in st.session_state:
+    st.session_state.interaction_mode = "chat"  # "chat" or "voice"
+if 'last_order_details' not in st.session_state:
+    st.session_state.last_order_details = None
 
 # Language code mapping (alias for use in app)
 lang_code_map = LANGUAGE_CODE_MAP
+
 
 
 def check_backend_connection():
@@ -135,6 +150,7 @@ def logout_user():
     st.session_state.access_token = None
     st.session_state.pending_order = None
     st.session_state.agent_trace = []
+    st.session_state.last_order_details = None
     st.rerun()
 
 
@@ -334,7 +350,30 @@ else:
     else:
         # ==================== USER DASHBOARD - CHAT INTERFACE ====================
         
-        # Language Selection
+        # Mode Selection: Chat vs Voice
+        st.markdown("### 🔄 Select Interaction Mode")
+        mode_col1, mode_col2 = st.columns(2)
+        
+        with mode_col1:
+            if st.button("💬 Chat Mode", 
+                       type="primary" if st.session_state.interaction_mode == "chat" else "secondary",
+                       key="mode_chat"):
+                st.session_state.interaction_mode = "chat"
+                # Stop voice mode if switching to chat
+                if is_voice_mode_active():
+                    stop_voice_mode()
+                st.rerun()
+        
+        with mode_col2:
+            if st.button("🎙️ Voice Mode", 
+                       type="primary" if st.session_state.interaction_mode == "voice" else "secondary",
+                       key="mode_voice"):
+                st.session_state.interaction_mode = "voice"
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # Language Selection (only in chat mode or for voice language preference)
         st.markdown("### 🌍 Choose Your Language")
         col_lang1, col_lang2 = st.columns([1, 2])
         
@@ -352,7 +391,40 @@ else:
         
         st.markdown("---")
         
-        st.subheader("💬 Chat with SwasthyaSarthi")
+        # Initialize voice_active flag
+        voice_active = False
+        
+        # ==================== VOICE MODE INTERFACE ====================
+        if st.session_state.interaction_mode == "voice":
+            st.subheader("🎙️ Voice Conversation")
+            
+            # Render voice agent UI
+            voice_active = render_voice_mode_ui(
+                user_id=st.session_state.user_email,
+                user_email=st.session_state.user_email,
+                voice_type="female"
+            )
+            
+        # If voice mode is active, show voice interface only
+        if voice_active:
+
+            st.markdown("---")
+            st.info("🎤 Voice mode is active. Speak naturally and I'll respond automatically.")
+            
+            # Show chat history from voice interactions
+            voice_text = get_voice_input_text()
+            if voice_text:
+                st.markdown(f"**Last heard:** _{voice_text}_")
+            
+            # Footer for voice mode
+            st.markdown("---")
+            st.caption("🩺 SwasthyaSarthi - Your Friendly Pharmacy Assistant | Powered by AI Agents")
+        
+        # ==================== CHAT MODE INTERFACE ====================
+        else:
+            st.subheader("💬 Chat with SwasthyaSarthi")
+
+
 
         if 'history' not in st.session_state:
             st.session_state.history = []
@@ -396,6 +468,12 @@ else:
                             st.session_state.history.append(("SwasthyaSarthi", reply))
                             st.session_state.pending_order = None
                             st.session_state.agent_trace = result.get("agent_trace", [])
+                            
+                            # Store order details for price display
+                            order_price_details = result.get("order_price_details")
+                            if order_price_details:
+                                st.session_state.last_order_details = order_price_details
+                            
                             st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
@@ -405,37 +483,62 @@ else:
                     st.session_state.pending_order = None
                     st.rerun()
 
-        # Voice Input Section
-        st.markdown("### 🎤 Voice Chat")
-        col_voice1, col_voice2 = st.columns([2, 1])
-
-        with col_voice1:
-            st.info(f"🎤 Click and speak to me in {lang_choice}!")
+        # Display price summary card for last confirmed order
+        last_order = st.session_state.get("last_order_details")
+        if last_order:
+            st.markdown("""
+                <div style="
+                    background-color: #d4edda;
+                    border: 2px solid #28a745;
+                    border-radius: 10px;
+                    padding: 20px;
+                    margin: 15px 0;
+                ">
+                    <h3 style="color: #155724; margin-top: 0;">✅ Order Confirmed</h3>
+                    <table style="width: 100%; color: #155724;">
+                        <tr>
+                            <td><strong>Medicine:</strong></td>
+                            <td>{}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Quantity:</strong></td>
+                            <td>{}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Price per Unit:</strong></td>
+                            <td>₹{:.2f}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Total Price:</strong></td>
+                            <td><strong>₹{:.2f}</strong></td>
+                        </tr>
+                    </table>
+                </div>
+            """.format(
+                last_order.get("product_name", "N/A"),
+                last_order.get("quantity", 0),
+                last_order.get("unit_price", 0),
+                last_order.get("total_price", 0)
+            ), unsafe_allow_html=True)
             
-            if st.button(f"🎤 Start Speaking", key="voice_input_btn"):
-                with st.spinner("🎙️ Listening... Speak now!"):
-                    user_text = record_voice(lang_choice, duration=5)
-                    if user_text:
-                        st.session_state.voice_input = user_text
-                        st.rerun()
+            # Clear the order details after displaying
+            st.session_state.last_order_details = None
 
-        if 'voice_input' in st.session_state:
-            st.success(f"🎤 You said: {st.session_state.voice_input}")
-
-        # Text Input Section
-        st.markdown("### ⌨️ Or type your message")
+        # Text Input Section (Chat Mode Only)
+        st.markdown("### ⌨️ Type your message")
         user_input = st.text_input("You:", key="text_input", 
                                    placeholder=f"Type your message here...")
 
         # Send button
-        if st.button("Send 💬", type="primary") or (user_input and 'voice_input' in st.session_state):
-            final_input = st.session_state.get('voice_input', user_input) if user_input else st.session_state.get('voice_input', '')
+        if st.button("Send 💬", type="primary") and user_input:
+            final_input = user_input
             
             if final_input:
-                if 'voice_input' in st.session_state:
-                    del st.session_state.voice_input
-                    
                 st.session_state.history.append(("You", final_input))
+                
+                # Detect language from input for auto-response matching
+                lang_detect = detect_language(final_input, use_llm_fallback=True)
+                detected_lang = lang_detect.get("language", lang_choice)
                 
                 try:
                     with st.spinner("🤖 Let me help you with that..."):
@@ -445,7 +548,7 @@ else:
                                 "user_id": st.session_state.user_email,
                                 "user_phone": None,
                                 "user_email": st.session_state.user_email,
-                                "user_language": lang_code_map.get(lang_choice, "en"),
+                                "user_language": lang_code_map.get(detected_lang, "en"),
                                 "user_address": None,
                                 "structured_order": {},
                                 "safety_result": {},
@@ -459,7 +562,13 @@ else:
                                 "agent_trace": [],
                                 "is_order_request": True,
                                 "info_product": "",
-                                "info_response": ""
+                                "info_response": "",
+                                "metadata": {
+                                    "agent_name": "chat_interface",
+                                    "action": "process_chat_input",
+                                    "language": detected_lang,
+                                    "interaction_mode": "chat"  # For LangSmith observability
+                                }
                             },
                             config={"configurable": {"thread_id": f"{st.session_state.user_email}:session"}}
                         )
@@ -478,27 +587,20 @@ else:
                             st.info("📋 Please confirm your order below!")
                         else:
                             st.success("✅ Got it! Let me know if you need anything else.")
+                            
+                            # Check if this was a successful order and store price details
+                            order_price_details = result.get("order_price_details")
+                            if order_price_details:
+                                st.session_state.last_order_details = order_price_details
                 except Exception as e:
                     error_msg = str(e)
                     st.error(f"❌ Error: {error_msg}")
                     reply = "Sorry, I encountered an error. Please try again."
                 
                 st.session_state.history.append(("SwasthyaSarthi", reply))
-
-                with st.spinner("🔊 Converting to speech..."):
-                    try:
-                        audio_data = text_to_speech(
-                            reply, 
-                            language=lang_choice, 
-                            voice_type="female",
-                            use_edge_tts=False
-                        )
-                        if audio_data:
-                            st.audio(audio_data, format="audio/mp3")
-                        else:
-                            st.warning("⚠️ Could not generate audio. Showing text only.")
-                    except Exception as e:
-                        st.warning(f"⚠️ TTS unavailable: {e}. Showing text only.")
+                
+                # CHAT MODE: No TTS - text only response
+                # Voice responses only happen in Voice Mode
 
         # Display chat history
         st.markdown("### 📝 Chat History")
@@ -512,6 +614,7 @@ else:
             if st.button("Clear Chat 🗑️"):
                 st.session_state.history = []
                 st.session_state.pending_order = None
+                st.session_state.last_order_details = None
                 st.rerun()
         
         # --- Quick Actions Section ---
@@ -564,6 +667,6 @@ else:
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-    # --- Footer ---
-    st.markdown("---")
-    st.caption("🩺 SwasthyaSarthi - Your Friendly Pharmacy Assistant | Powered by AI Agents")
+        # --- Footer for Chat Mode ---
+        st.markdown("---")
+        st.caption("🩺 SwasthyaSarthi - Your Friendly Pharmacy Assistant | Powered by AI Agents")

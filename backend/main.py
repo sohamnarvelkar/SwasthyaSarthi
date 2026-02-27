@@ -116,16 +116,39 @@ def get_all_medicines(db: Session = Depends(get_db)):
 
 @app.post("/create_order")
 def create_order(patient_id: str, product_name: str, quantity: int, db: Session = Depends(get_db)):
-    """Create an order, deducting stock."""
+    """Create an order, deducting stock. Price is fetched from dataset."""
+    # Fetch medicine from database (price comes from products-export.xlsx)
     med = db.query(Medicine).filter(Medicine.name == product_name).first()
-    if not med or med.stock < quantity:
-        return {"status": "failed", "reason": "out_of_stock_or_not_found"}
+    
+    # Validation: Medicine must exist
+    if not med:
+        return {"status": "failed", "reason": "medicine_not_found", "message": f"Medicine '{product_name}' not found in inventory"}
+    
+    # Validation: Price must be available from dataset
+    if med.price is None or med.price <= 0:
+        return {"status": "failed", "reason": "price_not_available", "message": f"Price not available for '{product_name}'. Cannot process order."}
+    
+    # Validation: Stock must be sufficient
+    if med.stock < quantity:
+        return {"status": "failed", "reason": "out_of_stock", "message": f"Insufficient stock for '{product_name}'. Available: {med.stock}, Requested: {quantity}"}
+    
+    # Calculate prices
+    unit_price = med.price
+    total_price = round(unit_price * quantity, 2)
     
     # Get patient info for email
     patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
     
+    # Deduct stock and create order with price details
     med.stock -= quantity
-    order = Order(patient_id=patient_id, product_name=product_name, quantity=quantity, status="CREATED")
+    order = Order(
+        patient_id=patient_id, 
+        product_name=product_name, 
+        quantity=quantity,
+        unit_price=unit_price,
+        total_price=total_price,
+        status="CREATED"
+    )
     db.add(order)
     db.commit()
     
@@ -134,14 +157,23 @@ def create_order(patient_id: str, product_name: str, quantity: int, db: Session 
         order_details = {
             "order_id": order.id,
             "date": datetime.now().isoformat(),
-            "items": [{"name": product_name, "quantity": quantity, "price": med.price}],
-            "total": round(med.price * quantity, 2),
+            "items": [{"name": product_name, "quantity": quantity, "unit_price": unit_price, "total_price": total_price}],
+            "unit_price": unit_price,
+            "total_price": total_price,
             "address": patient.address or "N/A",
             "customer_email": patient.email
         }
         send_order_confirmation_email(patient.email, order_details)
     
-    return {"status": "success", "order_id": order.id, "price": round(med.price * quantity, 2)}
+    return {
+        "status": "success", 
+        "order_id": order.id, 
+        "product_name": product_name,
+        "quantity": quantity,
+        "unit_price": unit_price,
+        "total_price": total_price
+    }
+
 
 # ==================== PATIENT ENDPOINTS ====================
 
@@ -167,7 +199,9 @@ def get_patient_orders(patient_id: str, db: Session = Depends(get_db)):
     """Get order history for a patient."""
     orders = db.query(Order).filter(Order.patient_id == patient_id).order_by(Order.order_date.desc()).all()
     return [{"id": o.id, "product_name": o.product_name, "quantity": o.quantity, 
+             "unit_price": o.unit_price, "total_price": o.total_price,
              "status": o.status, "order_date": o.order_date.isoformat() if o.order_date else None} for o in orders]
+
 
 # ==================== REFILL ENDPOINTS ====================
 
@@ -385,8 +419,10 @@ def get_orders(patient_id: str = None, db: Session = Depends(get_db)):
         query = query.filter(Order.patient_id == patient_id)
     orders = query.all()
     return [{"id": o.id, "patient_id": o.patient_id, "product_name": o.product_name,
-             "quantity": o.quantity, "status": o.status, 
+             "quantity": o.quantity, "unit_price": o.unit_price, "total_price": o.total_price,
+             "status": o.status, 
              "order_date": o.order_date.isoformat() if o.order_date else None} for o in orders]
+
 
 # ==================== PROCUREMENT ENDPOINTS ====================
 

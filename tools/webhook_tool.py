@@ -54,14 +54,21 @@ def trigger_fulfillment(order_id: str):
 def send_order_confirmation_email(
     to_email: str,
     order_details: Dict[str, Any],
-    subject: str = "Order Confirmation - SwasthyaSarthi"
+    subject: str = "SwasthyaSarthi Order Confirmation"
 ) -> Dict[str, Any]:
     """
     Send order confirmation email using Gmail SMTP.
+    Includes detailed pricing information from the dataset.
     
     Args:
         to_email: Recipient email address
-        order_details: Dictionary containing order information
+        order_details: Dictionary containing order information including:
+            - order_id: Order ID
+            - items: List of items with name, quantity, unit_price, total_price
+            - unit_price: Price per unit
+            - total_price: Total order price
+            - date: Order date
+            - address: Shipping address
         subject: Email subject line
     
     Returns:
@@ -73,27 +80,41 @@ def send_order_confirmation_email(
             "error": "Gmail not configured. Set GMAIL_EMAIL and GMAIL_APP_PASSWORD in .env"
         }
     
-    # Email content template
+    # Extract order details
+    order_id = order_details.get('order_id', 'N/A')
+    order_date = order_details.get('date', 'N/A')
+    items = order_details.get('items', [])
+    unit_price = order_details.get('unit_price', 0)
+    total_price = order_details.get('total_price', 0)
+    address = order_details.get('address', 'N/A')
+    
+    # Format items for email
+    items_text = format_order_items(items)
+    
+    # Email content template with price details
     email_body = f"""
-Dear Customer,
+Subject: {subject}
 
-Thank you for your order with SwasthyaSarthi!
+Hello,
+
+Your medicine order has been successfully placed.
 
 Order Details:
---------------
-Order ID: {order_details.get('order_id', 'N/A')}
-Date: {order_details.get('date', 'N/A')}
-Items:
-{format_order_items(order_details.get('items', []))}
-
-Total Amount: ₹{order_details.get('total', 0)}
+--------------------------------
+Order ID: {order_id}
+{items_text}
+--------------------------------
+Price per Unit: ₹{unit_price:.2f}
+Total Price: ₹{total_price:.2f}
+Order Time: {order_date}
+--------------------------------
 
 Shipping Address:
-{order_details.get('address', 'N/A')}
+{address}
 
 Your order will be processed and shipped soon.
 
-Thank you for choosing SwasthyaSarthi!
+Thank you for using SwasthyaSarthi.
 
 Best regards,
 SwasthyaSarthi Team
@@ -178,7 +199,7 @@ def send_order_confirmation_sms(
     order_details: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Send order confirmation SMS.
+    Send order confirmation SMS with price details.
     """
     if not SMS_API_KEY:
         return {
@@ -186,8 +207,11 @@ def send_order_confirmation_sms(
             "error": "SMS API not configured. Set SMS_API_KEY in .env"
         }
     
-    message = f"SwasthyaSarthi: Your order #{order_details.get('order_id', '')} confirmed! "
-    message += f"Total: ₹{order_details.get('total', 0)}. "
+    total_price = order_details.get('total_price', 0)
+    order_id = order_details.get('order_id', '')
+    
+    message = f"SwasthyaSarthi: Your order #{order_id} confirmed! "
+    message += f"Total: ₹{total_price:.2f}. "
     message += "We'll notify you when it's shipped."
     
     try:
@@ -244,15 +268,22 @@ def send_generic_webhook(
 
 
 def format_order_items(items: list) -> str:
-    """Format order items for display"""
+    """Format order items for display in email"""
     if not items:
         return "No items"
     
     formatted = []
     for item in items:
-        formatted.append(
-            f"- {item.get('name', 'Unknown')} x {item.get('quantity', 1)} = ₹{item.get('price', 0)}"
-        )
+        name = item.get('name', 'Unknown')
+        quantity = item.get('quantity', 1)
+        unit_price = item.get('unit_price', item.get('price', 0))
+        total_price = item.get('total_price', round(unit_price * quantity, 2))
+        
+        formatted.append(f"Medicine: {name}")
+        formatted.append(f"Quantity: {quantity}")
+        formatted.append(f"Price per Unit: ₹{unit_price:.2f}")
+        formatted.append(f"Item Total: ₹{total_price:.2f}")
+    
     return "\n".join(formatted)
 
 

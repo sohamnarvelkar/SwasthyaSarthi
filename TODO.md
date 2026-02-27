@@ -1,29 +1,15 @@
-# SwasthyaSarthi - Feature Implementation TODO
+# Price-Aware Ordering Implementation TODO
 
-## New Features Implementation ✅ COMPLETED
+## Tasks:
+- [x] 1. Update Order model in `backend/models.py` - add unit_price and total_price columns
+- [x] 2. Update `/create_order` endpoint in `backend/main.py` - fetch price, calculate total, save to DB
+- [x] 3. Update `agents/state_schema.py` - add order_price_details field
+- [x] 4. Update `agents/execution_agent.py` - fetch price, store in state, update response
+- [x] 5. Update `tools/webhook_tool.py` - update email template with price details
+- [x] 6. Update `agents/confirmation_agent.py` - include price in confirmation message
+- [x] 7. Update `frontend/app.py` - display price summary card
+- [x] 8. Test the complete flow
 
-### 1. Drug Interaction Detection ✅
-- [x] Create `data/drug_interactions.json` - predefined drug interaction database
-- [x] Create `agents/drug_interaction_agent.py` - checks patient's existing medicines
-- [x] Modify `orchestration/graph.py` - add new agent node to workflow
-- [x] Update `agents/state_schema.py` - add new fields for interaction warnings
+## Implementation Complete ✅
 
-### 2. Smart Alternative Recommendation ✅
-- [x] Create `tools/recommendation_tool.py` - uses string similarity for alternatives
-- [x] Modify `agents/safety_agent.py` - integrate alternatives when out of stock/prescription required
-
-### 3. Automatic Procurement Trigger ✅
-- [x] Create `tools/procurement_tool.py` - trigger warehouse orders
-- [x] Modify `tools/inventory_tool.py` - add stock monitoring
-- [x] Add backend endpoint `/auto-procurement` in `backend/main.py`
-- [x] Update `backend/models.py` - add ProcurementLog model
-
-## Implementation Notes
-- Drug Interaction Agent runs after Safety Agent in the workflow
-- Alternative Recommendations integrated into Safety Agent responses
-- Procurement triggered automatically when stock < 10 units
-
-## Demo Lines Ready:
-🥇 "SwasthyaSarthi doesn't just check stock. It checks patient safety."
-🥈 Smart alternatives from products-export.xlsx when out of stock
-🥉 "Inventory fell below 10 units, system auto-ordered replenishment."
+All prices come from products-export.xlsx via Medicine model. No hardcoded prices.

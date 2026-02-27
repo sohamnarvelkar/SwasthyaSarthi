@@ -59,5 +59,8 @@ class AgentState(TypedDict):
     procurement_triggered: Optional[bool]
     procurement_details: Optional[dict]
 
+    # Price tracking for orders
+    order_price_details: Optional[dict]
+
     # Observability - tracing agent interactions
     agent_trace: List[dict]

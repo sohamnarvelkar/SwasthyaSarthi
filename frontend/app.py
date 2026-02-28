@@ -26,7 +26,7 @@ from frontend.components.language_detector import detect_language, get_language_
 
 
 # API Base URL
-API_BASE_URL = "http://localhost:8001"
+API_BASE_URL = "http://localhost:8000"
 
 # MUST be the first Streamlit command
 st.set_page_config(page_title="SwasthyaSarthi", layout="wide", page_icon="🩺")

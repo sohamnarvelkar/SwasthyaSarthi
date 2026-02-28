@@ -24,7 +24,8 @@ numpy==1.26.3
 langchain>=0.3.0
 langgraph>=0.2.0
 langchain-core>=0.3.0
-langchain-ollama>=0.2.0
+openai>=1.0.0
+google-generativeai>=0.8.0
 
 # Environment
 python-dotenv==1.0.1
@@ -32,13 +33,21 @@ python-dotenv==1.0.1
 # Audio
 edge-tts==6.1.10
 faster-whisper==1.0.3
-sounddevice==0.4.9
+sounddevice>=0.4.0
 gTTS==2.5.1
 SpeechRecognition==3.10.4
-pyaudio==0.2.14
+pyaudio>=0.2.14
 
 # Email
 PyJWT==2.8.0
 
 # Data Validation
 pydantic>=2.0
+
+# OCR - Prescription Processing
+easyocr>=1.7.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# Fuzzy matching
+rapidfuzz>=3.0.0

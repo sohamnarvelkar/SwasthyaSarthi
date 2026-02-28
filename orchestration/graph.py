@@ -1,122 +1,79 @@
 """
-LangGraph Workflow with Router + Specialist Agent Architecture.
-Provides full traceability of the multi-agent pharmacy system.
-
-Agent Flow:
-1. ROUTER - Classifies intent (GREETING, SYMPTOM_QUERY, MEDICINE_ORDER, etc.)
-2. Based on intent:
-   - GREETING/GENERAL_CHAT → General Conversation Agent
-   - SYMPTOM_QUERY → Medical Advisor Agent → Recommendation Agent
-   - MEDICINE_RECOMMENDATION → Recommendation Agent  
-   - MEDICINE_ORDER → Pharmacist Agent → Safety Agent → Confirmation → Execution
-
-Each step is traced for observability in LangSmith.
+LangGraph Workflow - With Router Agent:
+1. Router Agent - Intent detection and routing
+2. Pharmacist Agent - Order parsing and validation
+3. Safety Agent - Medicine safety checks
+4. Execution Agent - Order processing
+5. Refill Trigger Agent - Medication refill reminders
+6. Prescription Agent - Prescription OCR & medicine extraction
 """
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from agents.state_schema import AgentState
-
-# Import all agents
 from agents.router_agent import router_agent
-from agents.general_chat_agent import general_chat_agent
-from agents.medical_advisor_agent import medical_advisor_agent
-from agents.recommendation_agent import recommendation_agent
 from agents.pharmacist_agent import pharmacist_agent
 from agents.safety_agent import safety_agent
-from agents.drug_interaction_agent import drug_interaction_agent
-from agents.confirmation_agent import confirmation_agent
 from agents.execution_agent import execution_agent
-
-# Import conversation memory for intent handling
-from agents.conversation_memory import set_last_intent, get_last_intent, has_symptoms, has_recommendations
+from agents.refill_trigger_agent import refill_trigger_agent
+from agents.prescription_agent import prescription_agent
 import os
 
-# LangSmith Configuration
-LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
-LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "swasthya-sarthi")
 
-# Configure LangSmith if available
-if LANGSMITH_API_KEY:
-    os.environ["LANGCHAIN_TRACING_V2"] = "true"
-    os.environ["LANGCHAIN_API_KEY"] = LANGSMITH_API_KEY
-    os.environ["LANGCHAIN_PROJECT"] = LANGSMITH_PROJECT
-    print(f"[Graph] LangSmith enabled - Project: {LANGSMITH_PROJECT}")
-else:
-    print("[Graph] LangSmith not configured - set LANGSMITH_API_KEY for tracing")
-
-
-def should_route_to_medical(state: AgentState) -> str:
-    """
-    Router logic to determine next agent based on intent.
-    Enhanced for conversational flow with memory awareness.
-    """
-    intent = state.get("intent_type", state.get("current_intent", "GENERAL_CHAT"))
-    user_id = state.get("user_id", "default")
-    session_id = state.get("session_id", "default")
+def should_route_intent(state: AgentState) -> str:
+    """Route based on detected intent from router agent."""
+    intent = state.get("current_intent", state.get("intent_type", "MEDICINE_ORDER"))
     
-    print(f"[Router] Intent: {intent}")
+    # If router already set final_response, skip to end
+    if state.get("final_response"):
+        return "end"
     
-    # Store intent in memory for follow-up tracking
-    set_last_intent(user_id, session_id, intent)
-    
-    # Route based on intent type
-    if intent in ["GREETING", "GENERAL_CHAT"]:
-        return "general"
-    elif intent in ["SYMPTOM_QUERY", "MEDICAL_INFORMATION"]:
-        return "medical"
-    elif intent == "MEDICINE_RECOMMENDATION":
-        # If we already have symptoms, go straight to recommendation
-        if has_symptoms(user_id, session_id):
-            return "recommend"
-        return "medical"  # Need to analyze symptoms first
+    # Route based on intent
+    if intent == "SHOW_MEDICINES":
+        return "end"  # Router handles this
+    elif intent == "UPLOAD_PRESCRIPTION":
+        return "prescription"
+    elif intent == "ORDER_HISTORY":
+        return "end"  # Router handles this
+    elif intent == "REFILL_REMINDERS":
+        return "refill"
+    elif intent == "SHOW_PROFILE":
+        return "end"  # Router handles this
+    elif intent == "GENERAL_CHAT":
+        return "end"  # Router handles this
     elif intent == "MEDICINE_ORDER":
-        return "order"
-    elif intent == "FOLLOW_UP":
-        # Smart follow-up routing based on conversation memory
-        if has_recommendations(user_id, session_id):
-            # User likely wants to order previously recommended medicine
-            return "order"
-        elif has_symptoms(user_id, session_id):
-            # Continue with recommendation flow
-            return "recommend"
-        else:
-            return "general"
+        return "pharmacist"
     else:
-        return "general"
+        return "pharmacist"
 
 
+def should_route_to_prescription(state: AgentState) -> str:
+    """Check if user wants to upload a prescription."""
+    user_input = state.get("user_input", "").lower()
+    intent = state.get("intent_type", "")
+    
+    if "prescription" in user_input or "prescribe" in user_input or intent == "PRESCRIPTION_UPLOAD":
+        return "prescription"
+    return "pharmacist"
 
-def should_route_from_medical(state: AgentState) -> str:
-    """
-    After medical advisor, determine next step.
-    If symptoms were found, recommend medicines.
-    Otherwise, end the conversation.
-    """
-    symptoms = state.get("identified_symptoms", [])
-    if symptoms and len(symptoms) > 0:
-        return "recommend"
+
+def should_route_to_safety(state: AgentState) -> str:
+    """After pharmacist, route to safety check."""
+    return "safety"
+
+
+def should_route_to_execution(state: AgentState) -> str:
+    """After safety check, route to execution."""
+    return "execution"
+
+
+def should_route_to_refill(state: AgentState) -> str:
+    """Check if user wants refill reminders."""
+    user_input = state.get("user_input", "").lower()
+    intent = state.get("intent_type", "")
+    
+    if "refill" in user_input or "reminder" in user_input or intent == "REFILL_REMINDERS":
+        return "refill"
     return "end"
-
-
-def should_route_after_recommendation(state: AgentState) -> str:
-    """
-    After recommendation, check if user wants to order.
-    This is determined by intent or user confirmation.
-    """
-    intent = state.get("intent_type", "GENERAL_CHAT")
-    user_id = state.get("user_id", "default")
-    session_id = state.get("session_id", "default")
-    
-    # If user explicitly wants to order
-    if intent == "MEDICINE_ORDER":
-        return "order"
-    
-    # If we have recommendations and user is following up
-    if has_recommendations(user_id, session_id) and intent == "FOLLOW_UP":
-        return "order"
-    
-    return "end"
-
 
 
 # Create the workflow
@@ -124,57 +81,58 @@ workflow = StateGraph(AgentState)
 
 # Add all agent nodes
 workflow.add_node("router", router_agent)
-workflow.add_node("general_chat", general_chat_agent)
-workflow.add_node("medical_advisor", medical_advisor_agent)
-workflow.add_node("recommendation", recommendation_agent)
+workflow.add_node("prescription", prescription_agent)
 workflow.add_node("pharmacist", pharmacist_agent)
 workflow.add_node("safety", safety_agent)
-workflow.add_node("drug_interaction", drug_interaction_agent)
-workflow.add_node("confirmation", confirmation_agent)
 workflow.add_node("execution", execution_agent)
+workflow.add_node("refill", refill_trigger_agent)
 
-# Entry point
+# Entry point - start with router
 workflow.set_entry_point("router")
 
-# Router decision - route based on intent
+# Router routes to appropriate handler based on intent
 workflow.add_conditional_edges(
     "router",
-    should_route_to_medical,
+    should_route_intent,
     {
-        "general": "general_chat",
-        "medical": "medical_advisor",
-        "recommend": "recommendation",
-        "order": "pharmacist"
-    }
-)
-
-# Medical advisor → Recommendation (conditional)
-workflow.add_conditional_edges(
-    "medical_advisor",
-    should_route_from_medical,
-    {
-        "recommend": "recommendation",
+        "prescription": "prescription",
+        "pharmacist": "pharmacist",
+        "refill": "refill",
         "end": END
     }
 )
 
-# After recommendation, check if user wants to order
+# Route based on input type for prescription upload
 workflow.add_conditional_edges(
-    "recommendation",
-    should_route_after_recommendation,
+    "prescription",
+    should_route_to_prescription,
     {
-        "order": "pharmacist",
-        "end": END
+        "prescription": "prescription",
+        "pharmacist": "pharmacist"
     }
 )
 
+# Prescription flow: if prescription uploaded, process it
+workflow.add_edge("prescription", "pharmacist")
 
-# Order flow: pharmacist → safety → drug_interaction → confirmation → execution
+# Pharmacist → Safety
 workflow.add_edge("pharmacist", "safety")
-workflow.add_edge("safety", "drug_interaction")
-workflow.add_edge("drug_interaction", "confirmation")
-workflow.add_edge("confirmation", "execution")
-workflow.add_edge("execution", END)
+
+# Safety → Execution
+workflow.add_edge("safety", "execution")
+
+# Execution → Check for refill
+workflow.add_conditional_edges(
+    "execution",
+    should_route_to_refill,
+    {
+        "refill": "refill",
+        "end": END
+    }
+)
+
+# Refill → End
+workflow.add_edge("refill", END)
 
 # Compile with checkpoint memory for conversation continuity
 checkpointer = MemorySaver()
@@ -188,7 +146,6 @@ def run_conversation(user_input: str, user_id: str = "default", session_id: str 
                     user_language: str = "en") -> dict:
     """
     Run a conversation turn through the agent workflow.
-    Enhanced with full observability and conversational memory.
     
     Args:
         user_input: User's message
@@ -199,53 +156,44 @@ def run_conversation(user_input: str, user_id: str = "default", session_id: str 
     Returns:
         dict with final_response, agent_trace, and metadata
     """
-    from agents.conversation_memory import get_session, add_message
-    
-    # Initialize or get existing session
-    session = get_session(user_id, session_id)
-    
-    # Add user message to history
-    add_message(user_id, session_id, "user", user_input)
-    
-    # Initialize state with conversation context
+    # Initialize state
     initial_state = {
         "user_input": user_input,
         "user_id": user_id,
         "session_id": session_id,
         "user_language": user_language,
-        "intent_type": "GENERAL_CHAT",
-        "current_intent": "GENERAL_CHAT",
+        "intent_type": "MEDICINE_ORDER",
+        "current_intent": "MEDICINE_ORDER",
         "detected_language": user_language,
-        "identified_symptoms": session.get("last_symptoms", []),
-        "possible_conditions": session.get("last_conditions", []),
+        "identified_symptoms": [],
+        "possible_conditions": [],
         "medical_advice": "",
-        "recommended_medicines": session.get("recommended_medicines", []),
+        "recommended_medicines": [],
         "metadata": {
-            "agent_name": "conversation_router",
+            "agent_name": "workflow",
             "action": "process_user_input",
             "language": user_language
         },
         "agent_trace": []
     }
     
-    # Run the graph with checkpointing for conversation continuity
+    # Run the graph
     try:
         result = app_graph.invoke(
             initial_state,
             config={"configurable": {"thread_id": f"{user_id}:{session_id}"}}
         )
         
-        # Add assistant response to history
-        add_message(user_id, session_id, "assistant", result.get("final_response", ""))
-        
-        return {
+        response_data = {
             "response": result.get("final_response", ""),
-            "intent": result.get("intent_type", "GENERAL_CHAT"),
+            "intent": result.get("intent_type", "MEDICINE_ORDER"),
             "trace": result.get("agent_trace", []),
             "metadata": result.get("metadata", {}),
             "recommended_medicines": result.get("recommended_medicines", []),
             "symptoms": result.get("identified_symptoms", [])
         }
+        
+        return response_data
     except Exception as e:
         print(f"[Graph] Error: {e}")
         return {
@@ -256,19 +204,3 @@ def run_conversation(user_input: str, user_id: str = "default", session_id: str 
             "recommended_medicines": [],
             "symptoms": []
         }
-
-
-def get_conversation_context(user_id: str = "default", session_id: str = "default") -> dict:
-    """
-    Get the current conversation context for a session.
-    Useful for follow-up queries and maintaining state.
-    """
-    from agents.conversation_memory import get_session
-    
-    session = get_session(user_id, session_id)
-    return {
-        "last_symptoms": session.get("last_symptoms", []),
-        "last_recommendations": session.get("recommended_medicines", []),
-        "last_intent": session.get("last_intent", "GENERAL_CHAT"),
-        "conversation_history": session.get("conversation_history", [])
-    }

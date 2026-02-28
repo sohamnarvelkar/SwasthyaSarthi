@@ -10,6 +10,7 @@ from typing import Optional
 from jose import JWTError, jwt
 import sys
 import os
+import tempfile
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools.webhook_tool import send_order_confirmation_email
 
@@ -31,8 +32,8 @@ def get_password_hash(password):
 def validate_password(password: str) -> tuple[bool, str]:
     """
     Validate password against security rules.
-    Returns (is_valid, error_message)
-    """
+   , error_message)
+ Returns (is_valid    """
     if len(password) < 4:
         return False, "Password must be at least 4 characters long"
     return True, ""
@@ -99,11 +100,15 @@ def get_medicine(name: str = None, db: Session = Depends(get_db)):
     """Return medicine info by name or all medicines."""
     if name:
         med = db.query(Medicine).filter(Medicine.name.ilike(f"%{name}%")).first()
-        return med
+        if med:
+            return {"id": med.id, "product_id": med.product_id, "name": med.name, "price": med.price, 
+                    "in_stock": med.stock > 0, "stock": med.stock, "prescription_required": med.prescription_required,
+                    "description": med.description, "package_size": med.package_size}
+        return None
     else:
         medicines = db.query(Medicine).all()
         return [{"id": m.id, "product_id": m.product_id, "name": m.name, "price": m.price, 
-                 "stock": m.stock, "prescription_required": m.prescription_required,
+                 "in_stock": m.stock > 0, "stock": m.stock, "prescription_required": m.prescription_required,
                  "description": m.description, "package_size": m.package_size} for m in medicines]
 
 @app.get("/medicines")
@@ -111,7 +116,7 @@ def get_all_medicines(db: Session = Depends(get_db)):
     """Return all medicines with stock info."""
     medicines = db.query(Medicine).all()
     return [{"id": m.id, "product_id": m.product_id, "name": m.name, "price": m.price, 
-             "stock": m.stock, "prescription_required": m.prescription_required,
+             "in_stock": m.stock > 0, "stock": m.stock, "prescription_required": m.prescription_required,
              "description": m.description, "package_size": m.package_size} for m in medicines]
 
 @app.post("/create_order")
@@ -317,6 +322,18 @@ def register(email: str, password: str, full_name: str = None, db: Session = Dep
     db.commit()
     db.refresh(user)
     
+    # Send welcome/login notification email
+    try:
+        from tools.webhook_tool import send_login_notification_email
+        email_result = send_login_notification_email(
+            to_email=email,
+            full_name=full_name,
+            subject="Welcome to SwasthyaSarthi - Account Created!"
+        )
+        print(f"[Email] Login notification sent to {email}: {email_result}")
+    except Exception as e:
+        print(f"[Email] Failed to send login notification: {e}")
+    
     return {"message": "User registered successfully", "user_id": user.id, "email": user.email}
 
 @app.post("/register-admin", status_code=status.HTTP_201_CREATED)
@@ -424,6 +441,134 @@ def get_orders(patient_id: str = None, db: Session = Depends(get_db)):
              "order_date": o.order_date.isoformat() if o.order_date else None} for o in orders]
 
 
+# ==================== PRESCRIPTION ENDPOINTS ====================
+
+import base64
+import uuid as uuid_module
+from fastapi import UploadFile, File, HTTPException
+from fastapi.responses import JSONResponse
+
+# Prescription upload directory
+PRESCRIPTION_DIR = tempfile.gettempdir() + "/swasthya_sarthi_prescriptions"
+os.makedirs(PRESCRIPTION_DIR, exist_ok=True)
+
+
+@app.post("/analyze-prescription")
+async def analyze_prescription(
+    file: UploadFile = File(...),
+    language: str = Query("en", description="Language code: en, hi, mr")
+):
+    """
+    Analyze a prescription image and extract medicines.
+    
+    Supports: jpg, jpeg, png, pdf
+    
+    Returns:
+        JSON with detected medicines and confidence scores
+    """
+    try:
+        # Validate file type
+        allowed_types = {"image/jpeg", "image/png", "image/jpg", "application/pdf"}
+        content_type = file.content_type
+        
+        if content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type. Allowed: jpg, jpeg, png, pdf"
+            )
+        
+        # Read file content
+        image_data = await file.read()
+        
+        # Check file size (max 10MB)
+        if len(image_data) > 10 * 1024 * 1024:
+            raise HTTPException(
+                status_code=400,
+                detail="File too large. Maximum size is 10MB"
+            )
+        
+        # Save prescription image
+        file_ext = ".jpg" if content_type == "image/jpeg" else ".png"
+        if content_type == "application/pdf":
+            file_ext = ".pdf"
+        
+        prescription_filename = f"prescription_{uuid_module.uuid4().hex}{file_ext}"
+        prescription_path = os.path.join(PRESCRIPTION_DIR, prescription_filename)
+        
+        with open(prescription_path, "wb") as f:
+            f.write(image_data)
+        
+        print(f"[Prescription API] Saved: {prescription_filename}")
+        
+        # Perform OCR
+        from backend.services.ocr_service import extract_prescription_text
+        ocr_result = extract_prescription_text(image_data)
+        
+        if not ocr_result.get("success") or not ocr_result.get("text"):
+            return JSONResponse({
+                "success": False,
+                "message": "Could not read prescription clearly. Please upload a clearer image.",
+                "detected_medicines": [],
+                "prescription_image": prescription_filename,
+                "ocr_method": ocr_result.get("method", "none"),
+                "ocr_confidence": ocr_result.get("confidence", 0)
+            })
+        
+        # Extract and match medicines
+        from agents.prescription_agent import process_prescription_direct
+        processed = process_prescription_direct(
+            ocr_text=ocr_result["text"],
+            language=language
+        )
+        
+        # Add prescription info to response
+        processed["prescription_image"] = prescription_filename
+        processed["ocr_method"] = ocr_result.get("method", "unknown")
+        processed["ocr_confidence"] = ocr_result.get("confidence", 0)
+        processed["ocr_text"] = ocr_result.get("text", "")[:500]  # First 500 chars
+        
+        print(f"[Prescription API] Found {len(processed['detected_medicines'])} medicines")
+        
+        return processed
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Prescription API] Error: {e}")
+        return JSONResponse({
+            "success": False,
+            "message": f"Error processing prescription: {str(e)}",
+            "detected_medicines": []
+        })
+
+
+@app.get("/prescriptions/{filename}")
+async def get_prescription_image(filename: str):
+    """Serve prescription images."""
+    import fastapi
+    
+    prescription_path = os.path.join(PRESCRIPTION_DIR, filename)
+    
+    if not os.path.exists(prescription_path):
+        raise HTTPException(status_code=404, detail="Prescription image not found")
+    
+    # Determine content type
+    content_type = "image/jpeg"
+    if filename.endswith(".pdf"):
+        content_type = "application/pdf"
+    elif filename.endswith(".png"):
+        content_type = "image/png"
+    
+    def iterfile():
+        with open(prescription_path, mode="rb") as f:
+            yield from f
+    
+    return fastapi.responses.StreamingResponse(
+        iterfile(),
+        media_type=content_type
+    )
+
+
 # ==================== PROCUREMENT ENDPOINTS ====================
 
 @app.post("/auto-procurement")
@@ -455,3 +600,391 @@ def update_procurement_log(log_id: int, status: str, notes: str = None):
         return {"status": "success" if success else "failed"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ==================== CHAT API ENDPOINTS ====================
+
+import uuid
+import hashlib
+from datetime import datetime
+
+# Audio cache directory
+AUDIO_CACHE_DIR = tempfile.gettempdir() + "/swasthya_sarthi_audio"
+
+# Ensure audio cache directory exists
+os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+
+
+def detect_language_from_text(text: str) -> str:
+    """
+    Detect language from text input.
+    Uses simple script detection for multilingual support.
+    """
+    import re
+    
+    # Devanagari script detection (Hindi/Marathi)
+    devanagari_range = r'[\u0900-\u097F]'
+    if re.search(devanagari_range, text):
+        # Simple keyword-based detection for Hindi vs Marathi
+        hindi_common = ["है", "हैं", "मैं", "मुझे", "आप", "क्या", "हूँ", "जा", "के", "का", "को"]
+        marathi_common = ["आहे", "मी", "मला", "तुम्ही", "काय", "आहे", "चे", "चा", "कोण"]
+        
+        hindi_count = sum(1 for word in hindi_common if word in text)
+        marathi_count = sum(1 for word in marathi_common if word in text)
+        
+        if marathi_count > hindi_count:
+            return "Marathi"
+        return "Hindi"
+    
+    # Default to English for Latin script
+    return "English"
+
+
+def get_language_code(language: str) -> str:
+    """Get ISO language code from language name."""
+    code_map = {
+        "English": "en",
+        "Hindi": "hi",
+        "Marathi": "mr"
+    }
+    return code_map.get(language, "en")
+
+
+@app.post("/chat")
+def chat_message(
+    message: str = Query(..., description="User message"),
+    user_id: str = Query("default"),
+    user_email: str = Query("default@example.com"),
+    language: str = Query(None),
+    session_id: str = Query(None)
+):
+    """
+    Chat API endpoint for text-based conversation.
+    Uses fallback handler when LangGraph workflow fails.
+    """
+    print(f"[Chat API] Received message: {message}")
+    
+    # Auto-detect language if not provided
+    if not language:
+        detected = detect_language_from_text(message)
+        language = detected
+    
+    lang_code = get_language_code(language)
+    
+    # Try the LangGraph workflow first
+    try:
+        # Create session ID if not provided
+        if not session_id:
+            session_id = f"{user_id}:{datetime.now().timestamp()}"
+        
+        # Import and run the agent graph
+        from orchestration.graph import app_graph
+        
+        result = app_graph.invoke(
+            {
+                "user_input": message,
+                "user_id": user_id,
+                "user_email": user_email,
+                "user_phone": None,
+                "user_address": None,
+                "user_language": lang_code,
+                "detected_language": language,
+                "session_id": session_id,
+                "intent_type": "GENERAL_CHAT",
+                "current_intent": "GENERAL_CHAT",
+                "identified_symptoms": [],
+                "possible_conditions": [],
+                "medical_advice": "",
+                "recommended_medicines": [],
+                "structured_order": {},
+                "safety_result": {},
+                "final_response": "",
+                "is_proactive": False,
+                "refill_alerts": [],
+                "requires_confirmation": False,
+                "confirmation_message": "",
+                "user_confirmed": None,
+                "pending_order_details": None,
+                "agent_trace": [],
+                "is_order_request": True,
+                "info_product": "",
+                "info_response": "",
+                "metadata": {
+                    "agent_name": "chat_interface",
+                    "action": "process_chat_input",
+                    "language": language,
+                    "interaction_mode": "chat",
+                    "source": "frontend"
+                }
+            },
+            config={"configurable": {"thread_id": session_id}}
+        )
+        
+        response_text = result.get("final_response", "")
+        
+        # If we got a valid response, return it
+        if response_text and len(response_text.strip()) > 0:
+            requires_confirm = result.get("requires_confirmation", False)
+            pending_details = result.get("pending_order_details")
+            
+            return {
+                "text": response_text,
+                "language": language,
+                "requires_confirmation": requires_confirm,
+                "pending_order": pending_details,
+                "metadata": {
+                    "mode": "chat",
+                    "language": language,
+                    "source": "frontend",
+                    "intent": result.get("intent_type", "GENERAL_CHAT"),
+                    "agent_trace": result.get("agent_trace", [])
+                }
+            }
+        
+    except Exception as e:
+        print(f"[Chat API] LangGraph error: {e}")
+    
+    # Fallback to rule-based handler when LangGraph fails or returns empty
+    try:
+        from chat_fallback import process_message
+        fallback_result = process_message(message, user_id, language)
+        
+        return {
+            "text": fallback_result["text"],
+            "language": language,
+            "requires_confirmation": False,
+            "pending_order": None,
+            "metadata": {
+                "mode": "chat",
+                "language": language,
+                "source": "fallback",
+                "intent": fallback_result.get("intent", "UNKNOWN")
+            }
+        }
+    except Exception as fallback_error:
+        print(f"[Chat API] Fallback error: {fallback_error}")
+        
+        # Final fallback - return a simple response
+        return {
+            "text": "I didn't quite get that. Would you like to:\n\n🛒 Order medicines\n📋 Upload prescription\n📦 View your orders\n🔔 Check refill reminders\n\nPlease let me know how I can help!",
+            "language": language or "English",
+            "requires_confirmation": False,
+            "pending_order": None,
+            "metadata": {
+                "mode": "chat",
+                "language": language or "English",
+                "source": "final_fallback",
+                "intent": "FALLBACK"
+            }
+        }
+
+
+@app.post("/voice")
+def voice_message(
+    transcript: str = Query(..., description="Voice transcript"),
+    user_id: str = Query("default"),
+    user_email: str = Query("default@example.com"),
+    language: str = Query(None),
+    session_id: str = Query(None)
+):
+    """
+    Voice API endpoint for speech-based conversation.
+    Returns both text and audio response.
+    """
+    try:
+        # Auto-detect language if not provided
+        if not language:
+            detected = detect_language_from_text(transcript)
+            language = detected
+        
+        lang_code = get_language_code(language)
+        
+        # Create session ID if not provided
+        if not session_id:
+            session_id = f"{user_id}:{datetime.now().timestamp()}"
+        
+        # Import and run the agent graph
+        from orchestration.graph import app_graph
+        
+        result = app_graph.invoke(
+            {
+                "user_input": transcript,
+                "user_id": user_id,
+                "user_email": user_email,
+                "user_phone": None,
+                "user_address": None,
+                "user_language": lang_code,
+                "detected_language": language,
+                "session_id": session_id,
+                "intent_type": "GENERAL_CHAT",
+                "current_intent": "GENERAL_CHAT",
+                "identified_symptoms": [],
+                "possible_conditions": [],
+                "medical_advice": "",
+                "recommended_medicines": [],
+                "structured_order": {},
+                "safety_result": {},
+                "final_response": "",
+                "is_proactive": False,
+                "refill_alerts": [],
+                "requires_confirmation": False,
+                "confirmation_message": "",
+                "user_confirmed": None,
+                "pending_order_details": None,
+                "agent_trace": [],
+                "is_order_request": True,
+                "info_product": "",
+                "info_response": "",
+                "metadata": {
+                    "agent_name": "voice_interface",
+                    "action": "process_voice_input",
+                    "language": language,
+                    "interaction_mode": "voice",
+                    "source": "frontend"
+                }
+            },
+            config={"configurable": {"thread_id": session_id}}
+        )
+        
+        response_text = result.get("final_response", "")
+        
+        # Generate audio using ElevenLabs
+        audio_url = None
+        try:
+            from backend.services.elevenlabs_service import generate_voice
+            
+            # Generate audio for the response
+            audio_data = generate_voice(response_text, language)
+            
+            if audio_data:
+                # Save audio to cache directory
+                audio_filename = f"{uuid.uuid4().hex}.mp3"
+                audio_path = os.path.join(AUDIO_CACHE_DIR, audio_filename)
+                
+                with open(audio_path, "wb") as f:
+                    f.write(audio_data)
+                
+                audio_url = f"/audio/{audio_filename}"
+        except Exception as tts_error:
+            print(f"[TTS Error] {tts_error}")
+            # Continue without audio if TTS fails
+        
+        requires_confirm = result.get("requires_confirmation", False)
+        pending_details = result.get("pending_order_details")
+        
+        return {
+            "text": response_text,
+            "language": language,
+            "audio_url": audio_url,
+            "requires_confirmation": requires_confirm,
+            "pending_order": pending_details,
+            "metadata": {
+                "mode": "voice",
+                "language": language,
+                "source": "frontend",
+                "intent": result.get("intent_type", "GENERAL_CHAT"),
+                "agent_trace": result.get("agent_trace", [])
+            }
+        }
+        
+    except Exception as e:
+        print(f"[Voice API] LangGraph error: {e}")
+    
+    # Fallback to rule-based handler when LangGraph fails or returns empty
+    try:
+        from chat_fallback import process_message
+        fallback_result = process_message(transcript, user_id, language)
+        
+        # Generate audio using ElevenLabs
+        audio_url = None
+        try:
+            from backend.services.elevenlabs_service import generate_voice
+            
+            audio_data = generate_voice(fallback_result["text"], language)
+            
+            if audio_data:
+                audio_filename = f"{uuid.uuid4().hex}.mp3"
+                audio_path = os.path.join(AUDIO_CACHE_DIR, audio_filename)
+                
+                with open(audio_path, "wb") as f:
+                    f.write(audio_data)
+                
+                audio_url = f"/audio/{audio_filename}"
+        except Exception as tts_error:
+            print(f"[TTS Error] {tts_error}")
+        
+        return {
+            "text": fallback_result["text"],
+            "language": language,
+            "audio_url": audio_url,
+            "requires_confirmation": False,
+            "pending_order": None,
+            "metadata": {
+                "mode": "voice",
+                "language": language,
+                "source": "fallback",
+                "intent": fallback_result.get("intent", "UNKNOWN")
+            }
+        }
+    except Exception as fallback_error:
+        print(f"[Voice API] Fallback error: {fallback_error}")
+        
+        # Final fallback - return a simple response
+        return {
+            "text": "I didn't quite get that. Would you like to:\n\n🛒 Order medicines\n📋 Upload prescription\n📦 View your orders\n🔔 Check refill reminders\n\nPlease let me know how I can help!",
+            "language": language or "English",
+            "audio_url": None,
+            "requires_confirmation": False,
+            "pending_order": None,
+            "metadata": {
+                "mode": "voice",
+                "language": language or "English",
+                "source": "final_fallback",
+                "intent": "FALLBACK"
+            }
+        }
+
+
+@app.get("/audio/{filename}")
+def get_audio(filename: str):
+    """Serve generated audio files."""
+    import fastapi
+    
+    audio_path = os.path.join(AUDIO_CACHE_DIR, filename)
+    
+    if not os.path.exists(audio_path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    
+    # Return the audio file
+    def iterfile():
+        with open(audio_path, mode="rb") as f:
+            yield from f
+    
+    return fastapi.responses.StreamingResponse(
+        iterfile(),
+        media_type="audio/mpeg",
+        headers={
+            "Content-Disposition": f"inline; filename={filename}"
+        }
+    )
+
+
+@app.get("/conversations/{user_id}")
+def get_conversation_history(
+    user_id: str,
+    session_id: str = None,
+    limit: int = 20
+):
+    """Get conversation history for a user."""
+    try:
+        from agents.conversation_memory import get_session, get_conversation_history
+        
+        if session_id:
+            history = get_conversation_history(user_id, session_id, limit)
+            return {"history": history, "session_id": session_id}
+        else:
+            # Get all sessions for user
+            return {"history": [], "message": "Session ID required for now"}
+    
+    except Exception as e:
+        return {"history": [], "error": str(e)}

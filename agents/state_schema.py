@@ -64,3 +64,22 @@ class AgentState(TypedDict):
 
     # Observability - tracing agent interactions
     agent_trace: List[dict]
+    
+    # === DUAL KNOWLEDGE ARCHITECTURE (NEW) ===
+    # Medicine source tracking (internal = dataset, external = non-dataset)
+    medicine_source: str  # "internal" | "external" | "unknown"
+    
+    # Last discussed medicine for follow-up queries
+    last_medicine_discussed: Optional[str]
+    
+    # External order tracking
+    external_order_requested: bool
+    external_order_created: bool
+    external_order_id: Optional[str]
+    external_order_details: Optional[dict]
+    
+    # Global medicine info (from LLM knowledge)
+    global_medicine_info: Optional[dict]
+    
+    # Medicine availability info
+    medicine_availability: Optional[dict]

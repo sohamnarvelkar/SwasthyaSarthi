@@ -1,15 +1,22 @@
-# Price-Aware Ordering Implementation TODO
+# Chatbot Integration Fix - TODO List
 
-## Tasks:
-- [x] 1. Update Order model in `backend/models.py` - add unit_price and total_price columns
-- [x] 2. Update `/create_order` endpoint in `backend/main.py` - fetch price, calculate total, save to DB
-- [x] 3. Update `agents/state_schema.py` - add order_price_details field
-- [x] 4. Update `agents/execution_agent.py` - fetch price, store in state, update response
-- [x] 5. Update `tools/webhook_tool.py` - update email template with price details
-- [x] 6. Update `agents/confirmation_agent.py` - include price in confirmation message
-- [x] 7. Update `frontend/app.py` - display price summary card
-- [x] 8. Test the complete flow
+## Task: Fix chatbot to handle all user intents (medicines, prescription, orders, profile, refills)
 
-## Implementation Complete ✅
+### Steps:
+1. [x] Analyze codebase and understand the issue
+2. [x] Create agents/router_agent.py - Intent detection router
+3. [x] Update orchestration/graph.py - Add router at entry point
+4. [ ] Test the fix
 
-All prices come from products-export.xlsx via Medicine model. No hardcoded prices.
+## Intent Types Supported:
+- SHOW_MEDICINES: Show available medicines list
+- UPLOAD_PRESCRIPTION: Upload a prescription
+- ORDER_HISTORY: Show user's order history
+- REFILL_REMINDERS: Check refill reminders
+- SHOW_PROFILE: Show user profile
+- MEDICINE_ORDER: Place a medicine order (existing)
+- GENERAL_CHAT: General conversation
+
+## Files Created/Modified:
+- CREATE: agents/router_agent.py (NEW - handles all intents)
+- MODIFY: orchestration/graph.py (added router at entry point)

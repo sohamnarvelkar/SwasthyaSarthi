@@ -59,6 +59,7 @@ def send_order_confirmation_email(
     """
     Send order confirmation email using Gmail SMTP.
     Includes detailed pricing information from the dataset.
+    Supports prescription-based orders with detected medicines list.
     
     Args:
         to_email: Recipient email address
@@ -69,6 +70,9 @@ def send_order_confirmation_email(
             - total_price: Total order price
             - date: Order date
             - address: Shipping address
+            - source: Order source (online/prescription)
+            - prescription_image: Filename of prescription image
+            - detected_medicines_list: List of detected medicines from prescription
         subject: Email subject line
     
     Returns:
@@ -88,8 +92,24 @@ def send_order_confirmation_email(
     total_price = order_details.get('total_price', 0)
     address = order_details.get('address', 'N/A')
     
+    # Prescription-specific fields
+    source = order_details.get('source', 'online')
+    prescription_image = order_details.get('prescription_image', None)
+    detected_medicines_list = order_details.get('detected_medicines_list', [])
+    
     # Format items for email
     items_text = format_order_items(items)
+    
+    # Build source info for prescription orders
+    source_info = ""
+    if source == 'prescription':
+        source_info = f"""
+Source: Prescription Upload
+Prescription Image: {prescription_image if prescription_image else 'Not attached'}
+"""
+        if detected_medicines_list:
+            medicines_list = "\n".join([f"  - {med}" for med in detected_medicines_list])
+            source_info += f"Detected Medicines:\n{medicines_list}\n"
     
     # Email content template with price details
     email_body = f"""
@@ -107,7 +127,7 @@ Order ID: {order_id}
 Price per Unit: ₹{unit_price:.2f}
 Total Price: ₹{total_price:.2f}
 Order Time: {order_date}
---------------------------------
+{source_info}--------------------------------
 
 Shipping Address:
 {address}
@@ -285,6 +305,94 @@ def format_order_items(items: list) -> str:
         formatted.append(f"Item Total: ₹{total_price:.2f}")
     
     return "\n".join(formatted)
+
+
+def send_login_notification_email(
+    to_email: str,
+    full_name: str = None,
+    subject: str = "Welcome to SwasthyaSarthi - Login Notification"
+) -> Dict[str, Any]:
+    """
+    Send login/welcome notification email when user registers or logs in.
+    
+    Args:
+        to_email: Recipient email address
+        full_name: User's full name (optional)
+        subject: Email subject line
+    
+    Returns:
+        dict: Status of the email sending
+    """
+    if not GMAIL_EMAIL or not GMAIL_APP_PASSWORD:
+        return {
+            "success": False,
+            "error": "Gmail not configured. Set GMAIL_EMAIL and GMAIL_APP_PASSWORD in .env"
+        }
+    
+    user_greeting = f"Hello{f' {full_name}' if full_name else ''}!"
+    
+    # Email content template
+    email_body = f"""
+Subject: {subject}
+
+{user_greeting},
+
+Welcome to SwasthyaSarthi - Your AI Pharmacy Assistant!
+
+We're excited to have you on board. You can now:
+
+- Chat with our AI assistant about health concerns
+- Get medicine recommendations
+- Upload prescriptions for automatic medicine detection
+- Place orders for medicines
+- Receive order confirmations via email
+- Use voice mode for hands-free conversations
+
+Your account is ready to use. Simply log in with your email and password.
+
+Important: Keep your login credentials safe. All order confirmations 
+and important notifications will be sent to this email address.
+
+Need help? Just ask our AI assistant!
+
+Thank you for choosing SwasthyaSarthi.
+
+Best regards,
+SwasthyaSarthi Team
+    """
+    
+    try:
+        # Create email message
+        msg = MIMEMultipart()
+        msg['From'] = GMAIL_EMAIL
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        
+        # Attach body
+        msg.attach(MIMEText(email_body, 'plain'))
+        
+        # Connect to Gmail SMTP server
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()  # Upgrade connection to secure
+        
+        # Login
+        server.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
+        
+        # Send email
+        server.sendmail(GMAIL_EMAIL, to_email, msg.as_string())
+        
+        # Quit server
+        server.quit()
+        
+        return {"success": True, "message": "Login notification email sent successfully via Gmail"}
+        
+    except smtplib.SMTPAuthenticationError:
+        return {
+            "success": False, 
+            "error": "Gmail authentication failed. Make sure you're using an App Password, not your regular password."
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def trigger_order_notifications(
